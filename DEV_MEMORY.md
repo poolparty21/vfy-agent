@@ -99,6 +99,40 @@ or a DNS record created by the account owner.
 
 ---
 
+## 2026-10-22 — ✅ missi rotated too: ALL FOUR secrets live, every agent ready
+
+The owner rotated **missi's** secret as well (`20ba6ee5…66c`, agentKey
+`52293fd21240a55b`). It was added to `AGENT_GAMES_HMAC_SECRETS`, making a
+list of **four**, and the Worker was redeployed.
+
+**Live-verified: all four secrets authenticate against the deployed Worker,
+each response signed with the same secret that signed the request.**
+
+| # | Agent | agentKey | Status |
+|---|---|---|---|
+| 1 | missi (original) | `d010c67c80f1f176` | ok |
+| 2 | jimmygreen | `57c2e98a1e7f2e6d` | ok |
+| 3 | jimmygreen (rotated) | `96218151c607b016` | ok — this one runs the VFY event |
+| 4 | **missi (rotated)** | `52293fd21240a55b` | ok — **the Proof Gatekeeper agent** |
+
+**The competition-critical path is now unblocked.** missi is the agent that
+scores in the eight daily Proof Gatekeeper rounds, and its platform-side
+AES-256-GCM blob was the one still undecryptable. All four secrets are also
+backed up in the workspace store.
+
+**Hygiene note:** the list now contains superseded secrets (missi #1 and
+jimmygreen #2). They are harmless — the platform only ever uses the current
+one — and keeping them means a mis-identified agent is never locked out. Once
+the first scored round has run and both agents are confirmed working, the
+superseded entries can be dropped from `AGENT_GAMES_HMAC_SECRETS`.
+
+**Next:** dispatch a Proof Gatekeeper practice task on missi and paste the
+**"Reason code"** row from one that returns **APPROVE** — that settles the
+`VALID_PROOF` vs `VALID_CONDITION` vocabulary, which is the last open
+question. `AGENT_REASON_STYLE` flips it with a var change and a redeploy.
+
+---
+
 ## 2026-10-22 — 🎉 STEAL THE VFY PRACTICE PASSED · missi still needs a rotation
 
 **The Steal the VFY practice turn worked end to end.** From the live tail:
