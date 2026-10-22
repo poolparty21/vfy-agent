@@ -193,6 +193,17 @@ export default {
     }
 
     const agentPath = env.AGENT_PATH ?? "/agent";
+
+    // The platform's health check may probe the REGISTERED endpoint with a
+    // plain GET, so that path must answer 200 even before a task arrives —
+    // a 404 here reads as an offline agent.
+    if (request.method === "GET" && url.pathname === agentPath) {
+      return new Response(JSON.stringify({ ok: true, agent: "vfy-agent", protocolVersion: "v1" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
     if (request.method !== "POST" || url.pathname !== agentPath) {
       return new Response(null, { status: 404 });
     }

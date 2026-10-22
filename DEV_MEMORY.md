@@ -4,6 +4,70 @@
 
 ---
 
+## 2026-10-22 — Agent registered as "missi" · real secret installed · preflight verified
+
+**Status:** the agent is REGISTERED on the platform and live-verified with the
+**real** platform secret. The remaining step is the platform's own first health
+check + the owner's preflight run.
+
+### The real secret is in place
+
+- Dashboard-issued secret installed as the Worker secret
+  `AGENT_GAMES_HMAC_SECRET` (the temporary test secret was replaced).
+- **Backup:** the value is stored in the workspace secret store
+  `C:\mnt\www\.env.local` under `AGENT_GAMES_HMAC_SECRET` (outside every git
+  repo). The platform says the secret is shown ONCE and cannot be recovered —
+  **that file is the only backup.** If the Worker secret is ever lost, rotate
+  it on the dashboard and re-put it.
+- The value itself is deliberately NOT written into this repo's files.
+
+### Live verification with the REAL secret
+
+| Check | Result |
+|---|---|
+| `GET /agent` | 200 `{"ok":true,"agent":"vfy-agent","protocolVersion":"v1"}` |
+| `GET /health` | 200 `{"ok":true,"agent":"vfy-agent"}` |
+| Preflight, secret as **text** | 200 `{"ok":true,"protocolVersion":"v1"}` |
+| Preflight, secret as **decoded hex bytes** | 200 — both forms work |
+| Response signature | **byte-identical to the platform's own text-form HMAC** → the platform keys the HMAC with the hex TEXT, and our response signing matches it exactly |
+| Unsigned POST | 401 |
+
+**Conclusion on the undocumented detail:** the platform uses the secret as
+**text**, not decoded bytes. The dual-form code in `src/hmac.js` is correct and
+harmless — it simply tries text first and never falls through.
+
+### The health-check fix
+
+The dashboard said *"pending its first health check"*, and `GET /agent` was
+returning **404** (only POST was routed). If the platform probes the
+registered endpoint with a GET, a 404 reads as an offline agent and would fail
+the check. Fixed: `GET /agent` now answers **200** with
+`{ok, agent, protocolVersion}` (unauthenticated, like `/health`).
+Regression test added — 54 tests, 54 pass.
+
+### Agent identity
+
+- Agent name on the platform: **`missi`**
+- X account `leavinglasvegaz` · username `paperwwin` · GitHub `poolparty21`
+- Signing wallet `0xbc32510486073532ba93694f0dede503642552a3`
+- Endpoint registered: `https://vfy-agent.hallo-alexa.workers.dev/agent`
+
+### Next steps
+
+1. **Watch the dashboard** — the first health check should now pass (it may
+   still be pending if it ran before the GET fix; hit "recheck" if offered).
+2. **Run preflight** on the platform — it must pass before the agent is marked
+   active. It should pass: the same signed request we tested returns 200 with
+   a correct signature.
+3. **Run Practice tasks** — every trap type is reproducible there and it does
+   not touch the leaderboard. Check each answer against the task history.
+4. Commit the Steal the VFY strategy on the dashboard → put the published hash
+   in `STRATEGY_COMMITMENT` in `wrangler.toml`.
+5. Optional: `wrangler secret put KURIER_API_KEY` to enable live Groth16
+   verification through Kurier.
+
+---
+
 ## 2026-10-22 — Agent built, deployed and verified live
 
 **Status:** Proof Gatekeeper agent is built, tested (53/53), deployed and

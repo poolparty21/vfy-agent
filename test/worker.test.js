@@ -148,6 +148,14 @@ test("a request to the wrong path is a 404", async () => {
   assert.equal(res.status, 404);
 });
 
+test("a GET on the registered agent path answers 200 (health check)", async () => {
+  const res = await worker.fetch(new Request("https://example.test/agent"), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.protocolVersion, "v1");
+});
+
 test("a valid gatekeeper task is approved and signed", async () => {
   const res = await post(gatekeeperTask());
   assert.equal(res.status, 200);
