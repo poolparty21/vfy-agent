@@ -4,6 +4,87 @@
 
 ---
 
+## 2026-10-22 — FIRST PRACTICE RUN: "Correct decision" · the real window is 15s, not 60s
+
+**Status:** the owner dispatched a practice task against **missi**. The
+platform reported **"Correct decision"** — our first attempt was right. The
+real payload confirmed the policy and exposed two things the docs get wrong.
+
+### What the platform actually sends (captured live)
+
+```json
+{
+  "type": "agent-games.proof-gatekeeper.v1",
+  "task_id": "practice_05b779b0-6300-4ed0-abe6-4ddf1388778e",
+  "mode": "practice",
+  "issued_at":  "2026-10-22T09:38:57.075Z",
+  "deadline_at": "2026-10-22T09:39:12.075Z",
+  "input": {
+    "registered_vk": "0x6b79c601...77b0",
+    "minimum": "1000", "public_balance": "100",
+    "expiry_block": 8430000, "current_block": 8420000,
+    "recipient": "0xabcdef...ef12", "condition_recipient": "0xabcdef...ef12",
+    "amount": "500", "max_transfer": "1000",
+    "proof_tx": "0x05b779b063004ed0abe64ddf1388778e",
+    "proof_vk": "0x6b79c601...77b0"
+  }
+}
+```
+Our response: `{"decision":"REJECT","reason_code":"THRESHOLD_MISMATCH","proof_tx":"0x05b779b0...778e"}`
+→ platform verdict: **"Correct decision. The public balance does not meet the
+required threshold."** Trap type `THRESHOLD_MISMATCH`. Latency 776ms.
+
+### 🔴 The real window is 15 SECONDS, not 60
+
+`deadline_at − issued_at` = **15.0s** exactly, while the docs say 60 seconds.
+The old code gave the verification step up to 12s of that — leaving a 3s
+margin, and a real on-chain walk costs ~4-5s. **That was a live timeout risk
+on every competition task** (−2, plus the task is forfeited).
+
+Fixed:
+- The verification budget is now **a fraction of the time actually left**
+  (`remaining * 0.5`), capped at 6s, and **skipped entirely** when less than
+  3s remain (`MIN_VERIFY_BUDGET_MS`).
+- The fallback when `deadline_at` is missing/unparseable dropped from 30s to a
+  conservative **12s**.
+- **A proof reference shorter than 32 bytes is skipped with ZERO RPC calls.**
+  The practice `proof_tx` is a 16-byte synthetic value; only a real Substrate
+  hash (64 hex chars) can be found on chain, so short references no longer
+  trigger a pointless block walk.
+- A synthetic reference also cannot be a replay id we have seen, so it is
+  still recorded in the seen-set exactly as before.
+
+**Replayed the exact practice payload against production after deploying:
+byte-identical answer, 1.17s.** 70 tests pass, including a new test built from
+the real captured payload.
+
+### The reason_code vocabulary is STILL not settled
+
+The practice task was `THRESHOLD_MISMATCH` — a code that is **identical in
+both vocabularies** (canonical `THRESHOLD_MISMATCH`, trap `THRESHOLD_MISMATCH`),
+so this run could not discriminate. The overlap between the two lists is only
+`PROOF_INVALID`, `THRESHOLD_MISMATCH`, `VK_SUBSTITUTION`.
+
+**The decisive test is an APPROVE task** (`VALID_PROOF` vs `VALID_CONDITION`)
+or a `PROOF_REUSED` one (`PROOF_REPLAY` vs `PROOF_REUSED`). Both are
+reachable in Practice. Until then `AGENT_REASON_STYLE` stays `canonical`
+(the rules page's explicit instruction).
+
+### Also learned
+
+- The platform shows a **"Trap type"** row separately from the **"Reason
+  code"** row, and reports **"Correct decision"** — so the outcome feedback
+  is per-decision, and practice never affects standings.
+- The practice page notes: *"Practice proofs are not submitted to the chain —
+  competition tasks generate on-chain"*, and shows a **"Proof: verified"**
+  badge. So in competition the payload WILL carry on-chain material, and the
+  Groth16 `proof` + `public_signals` echo (already implemented) becomes
+  load-bearing.
+- Practice task ids are `practice_<uuid>` and carry a **different shape** to
+  competition ids — worth knowing when reading the history.
+
+---
+
 ## 2026-10-22 — Where the Practice button is · two more multi-agent bugs found & fixed
 
 **Owner ask:** *"same repo and endpoint? i dont find the practise button maybe i

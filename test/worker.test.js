@@ -379,3 +379,56 @@ test("invalid JSON is a 400", async () => {
   assert.equal(res.status, 400);
 });
 
+test("a real practice-shaped task is answered correctly and fast", async () => {
+  // The shape the platform actually sends (captured from a live practice run
+  // on 2026-10-22): a 15-SECOND window, a 16-byte synthetic proof_tx, and no
+  // proof material at all.
+  const task = {
+    type: "agent-games.proof-gatekeeper.v1",
+    task_id: "practice_05b779b0-6300-4ed0-abe6-4ddf1388778e",
+    mode: "practice",
+    issued_at: new Date().toISOString(),
+    deadline_at: new Date(Date.now() + 15_000).toISOString(),
+    input: {
+      registered_vk: "0x6b79c6012a6d8651f3e13bc4d2a20370280ab49700c90c5316d4168bfbad77b0",
+      minimum: "1000",
+      public_balance: "100",
+      expiry_block: 8430000,
+      current_block: 8420000,
+      recipient: "0xabcdef1234567890abcdef1234567890abcdef12",
+      condition_recipient: "0xabcdef1234567890abcdef1234567890abcdef12",
+      amount: "500",
+      max_transfer: "1000",
+      proof_tx: "0x05b779b063004ed0abe64ddf1388778e",
+      proof_vk: "0x6b79c6012a6d8651f3e13bc4d2a20370280ab49700c90c5316d4168bfbad77b0",
+    },
+  };
+  const started = Date.now();
+  const res = await postTo(env(), task);
+  const elapsed = Date.now() - started;
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  // public_balance (100) < minimum (1000) => threshold mismatch.
+  assert.equal(body.decision, "REJECT");
+  assert.equal(body.reason_code, "THRESHOLD_MISMATCH");
+  assert.equal(body.proof_tx, "0x05b779b063004ed0abe64ddf1388778e");
+  // A 15s window: we must answer far inside it.
+  assert.ok(elapsed < 5000, `took ${elapsed}ms against a 15s window`);
+});
+
+test("a synthetic 16-byte proof reference is skipped without any RPC call", async () => {
+  // The on-chain lookup can only find a full 32-byte Substrate tx hash. A
+  // shorter reference must not trigger a block walk, which would burn
+  // subrequests and seconds for nothing.
+  const task = gatekeeperTask(
+    { proof_tx: "0x05b779b063004ed0abe64ddf1388778e" },
+    { task_id: "gk_synthetic_ref" },
+  );
+  const started = Date.now();
+  const res = await postTo(env(), task);
+  const elapsed = Date.now() - started;
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).decision, "APPROVE");
+  assert.ok(elapsed < 1500, `took ${elapsed}ms — a short reference must not trigger a block walk`);
+});
+

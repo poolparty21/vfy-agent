@@ -35,13 +35,29 @@ import { buildTurnResponse, isVfyTurn } from "./vfy.js";
 const enc = new TextEncoder();
 
 /**
+ * Bounds for the optional zkVerify verification step.
+ *
+ * The real response window is unknown: the docs say 60 seconds, but a live
+ * practice envelope (2026-10-22) gave only 15. The verification lookup is
+ * therefore capped at a fraction of the remaining time and skipped entirely
+ * when there is not enough room — a timeout (-2) is worse than any evidence
+ * the lookup could add.
+ */
+const MAX_VERIFY_BUDGET_MS = 6000;
+const MIN_VERIFY_BUDGET_MS = 3000;
+
+/**
  * How many milliseconds are left before the platform's deadline.
  *
- * The platform allows 60 seconds per task and states that late answers score
- * as timeouts. We default to a conservative 30s when the deadline is absent or
- * unparseable, so a malformed envelope can never turn into a timeout.
+ * The docs say 60 seconds, but a real practice envelope (2026-10-22) carried
+ * `deadline_at` only **15 seconds** after `issued_at`. The real window is
+ * therefore unknown and possibly much shorter than advertised, so the budget
+ * is taken from the envelope itself and never from a hard-coded assumption.
+ *
+ * When the deadline is absent or unparseable we fall back to a conservative
+ * 12s — short enough to be safe even against a 15s window.
  */
-function deadlineBudgetMs(task, fallbackMs = 30_000) {
+function deadlineBudgetMs(task, fallbackMs = 12_000) {
   const raw = task?.deadline_at ?? task?.deadlineAt;
   if (!raw) return fallbackMs;
   const at = Date.parse(raw);
@@ -110,13 +126,18 @@ async function verifyProof(env, input, budgetMs = 12_000) {
       return result;
     }
 
-    if (proofTx && left() > 1500) {
+    // Only a full 32-byte Substrate transaction hash can be found on chain.
+    // A shorter reference (practice tasks use a synthetic 16-byte one) is
+    // skipped without spending a single RPC call.
+    if (proofTx && /^(0x)?[0-9a-fA-F]{64}$/.test(proofTx.trim()) && left() > 1500) {
       const found = await findTransaction(proofTx, env.ZKVERIFY_RPC);
       result.status = found ? "on_chain" : "not_found";
       result.ok = Boolean(found);
       // A proof reference that is nowhere on chain is a real signal, but we do
       // not treat a lookup miss as proof invalid: the reference may predate our
       // lookback window.
+    } else if (proofTx) {
+      result.status = "skipped_short_reference";
     }
   } catch (err) {
     result.status = "error";
@@ -157,10 +178,13 @@ async function handleGatekeeper(env, task, sign) {
   const isFirstUse = await claimProofRef(db, agentKey, mode, proofTx, taskId);
   const isReplay = proofTx ? !isFirstUse : false;
 
-  // The platform allows 60 seconds. Reserve a safety margin and give the
-  // verification step only what is left of it, so the answer always lands
-  // well inside the window.
-  const budgetMs = Math.max(0, Math.min(12_000, deadlineBudgetMs(task) - 1500));
+  // The real window is unknown: a live practice envelope gave 15 seconds,
+  // while the docs claim 60. So the verification step gets only a FRACTION
+  // of whatever is left, and is skipped entirely when there is not enough
+  // room to do it safely. A timeout (-2) costs more than any evidence the
+  // lookup could add.
+  const remaining = deadlineBudgetMs(task);
+  const budgetMs = remaining <= MIN_VERIFY_BUDGET_MS ? 0 : Math.min(MAX_VERIFY_BUDGET_MS, remaining * 0.5);
 
   const verification = await verifyProof(env, input, budgetMs);
 
