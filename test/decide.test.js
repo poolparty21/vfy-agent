@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decide, REASON, toBig, normAddress } from "../src/decide.js";
+import { decide, REASON, toBig, normAddress, toReasonCode } from "../src/decide.js";
 
 const VK_A = "0x7d3a0000000000000000000000000000000000000000000000000000f291";
 const VK_B = "0xa4c1000000000000000000000000000000000000000000000000000000b8ff";
@@ -147,4 +147,29 @@ test("normAddress strips the prefix and lowercases", () => {
   assert.equal(normAddress("0xDE4209f01"), "de4209f01");
   assert.equal(normAddress("de4209f01"), "de4209f01");
   assert.equal(normAddress(42), "");
+});
+
+test("each verdict also carries the specific trap label", () => {
+  // The canonical vocabulary collapses expiry, recipient and amount into one
+  // code; the trap vocabulary must not, or a rejected task would be recorded
+  // as the wrong trap.
+  assert.equal(decide(valid()).trap_code, "VALID_CONDITION");
+  assert.equal(decide(valid({ public_balance: "1" })).trap_code, "THRESHOLD_MISMATCH");
+  assert.equal(decide(valid({ current_block: 19999999 })).trap_code, "EXPIRED_CONDITION");
+  assert.equal(
+    decide(valid({ condition_recipient: "0xde4200000000000000000000000000000000dead" })).trap_code,
+    "RECIPIENT_MISMATCH",
+  );
+  assert.equal(decide(valid({ amount: "99999" })).trap_code, "AMOUNT_OVERFLOW");
+  assert.equal(decide(valid({ proof_vk: VK_B })).trap_code, "VK_SUBSTITUTION");
+  assert.equal(decide(valid(), { isReplay: true }).trap_code, "PROOF_REUSED");
+});
+
+test("toReasonCode maps the canonical code to the trap label on request", () => {
+  assert.equal(toReasonCode(REASON.VALID, "canonical"), "VALID_PROOF");
+  assert.equal(toReasonCode(REASON.VALID, "trap"), "VALID_CONDITION");
+  assert.equal(toReasonCode(REASON.PROOF_REPLAY, "trap"), "PROOF_REUSED");
+  // Codes that are identical in both vocabularies pass through unchanged.
+  assert.equal(toReasonCode(REASON.VK_SUBSTITUTION, "trap"), "VK_SUBSTITUTION");
+  assert.equal(toReasonCode(REASON.THRESHOLD_MISMATCH, "trap"), "THRESHOLD_MISMATCH");
 });

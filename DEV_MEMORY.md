@@ -4,6 +4,116 @@
 
 ---
 
+## 2026-10-22 — Agent REGISTERED as "missi" · preflight PASSED · 3 bugs found & fixed
+
+**Status:** the agent is registered and **preflight passed** ("Preflight OK —
+Healthy · 528ms"). The platform's own health check and signed preflight both
+work against the real secret. Round 01 is ~25h away.
+
+### Three real bugs found by reading the LIVE arena screen
+
+The arena screen (Dashboard → the arena) showed the platform's own rendering
+of decisions, which made me re-read the scoring rules. That surfaced three
+bugs in the code that was already deployed:
+
+1. **SUBREQUEST BLOWOUT (would have broken EVERY live task).**
+   `findTransaction` walked 32 blocks x 2 RPC calls = **66 subrequests**, but
+   Cloudflare Workers allows **50 per invocation** on the free plan. Every
+   task would have thrown. Fixed: lookback cut to **8 blocks (16 calls)**,
+   the count is now computed from the cap before it is spent, and the D1
+   queries (which also count as subrequests) are budgeted for.
+2. **THE LOOKUP COULD NEVER MATCH.** `chain_getBlock` returns a block's
+   extrinsics as **HEX STRINGS**, not objects with a `hash` field — so
+   `ext.hash` was always undefined and the comparison always failed. A
+   Substrate tx hash is **blake2_256 of the encoded extrinsic**, so the
+   extrinsic has to be hashed first. Node has no blake2b-256 and Web Crypto
+   has no blake2 at all, so **`src/blake2.js` implements BLAKE2b-256 from
+   scratch** (RFC 7693) — verified against the official test vectors
+   (empty and "abc") AND against a real extrinsic from the live chain.
+   The lookup now genuinely finds transactions.
+3. **THE 60s WINDOW WAS AT RISK.** Measured zkVerify RPC latency is
+   **1.4-2.0s PER CALL**, so the old sequential walk would have taken ~85s on
+   its own — a guaranteed timeout (-2). Fixed: all lookups are **parallel**
+   (Promise.all) and **deadline-bounded**; the worker now computes a budget
+   from `deadline_at` and caps the verification step, and the response is
+   always well inside 60s. Measured live: **5.3s** end to end with a real
+   on-chain `proof_tx`, and the lookup confirmed the tx at block 5659006.
+
+### The scoring detail I had missed (would have cost points every task)
+
+The build guide says: *"Respond with the decision, a reason code, and — on
+every provable task — the Groth16 proof and its public_signals (an omitted or
+invalid proof costs −2)."* The scoring model repeats it: **"Missing / invalid
+proof: −2"** and the **reliability bonus (+0 to +5 per round) is pro-rated by
+the fraction of provable tasks whose Groth16 proof verified**. The agent was
+NOT returning the proof. It now **echoes `proof` and `public_signals`** from
+the task payload alongside the decision, so the platform can verify it
+independently. (Note: "PROOF_REUSED tasks have no proof to submit and are
+excluded" from the bonus.)
+
+### The reason_code vocabulary — switchable, not settled
+
+The rules page's "Quick reference → Canonical reason codes" table says to use
+`VALID_PROOF / PROOF_INVALID / THRESHOLD_MISMATCH / PROOF_REPLAY /
+CIRCUIT_MISMATCH / VK_SUBSTITUTION / PUBLIC_INPUT_MISMATCH /
+MISSING_VERIFICATION`.
+
+But the **live arena screen renders the TRAP labels**: `VALID_CONDITION`,
+`RECIPIENT_MISMATCH`, `THRESHOLD_MISMATCH`, `VK_SUBSTITUTION` — the event
+page's trap vocabulary. So the platform documents both, and its own UI uses
+the trap labels. **Which one it VALIDATES is not observable from outside.**
+
+Handled by making it a **one-var switch** (`AGENT_REASON_STYLE`):
+- `canonical` (default) — the rules page's explicit list
+- `trap` — the event page / arena labels, with the three "public input" traps
+  disambiguated (EXPIRED_CONDITION / RECIPIENT_MISMATCH / AMOUNT_OVERFLOW),
+  because the canonical `PUBLIC_INPUT_MISMATCH` collapses all three and the
+  trap vocabulary cannot.
+
+`src/decide.js` now returns BOTH `reason_code` and `trap_code` for every
+verdict, so switching is a var change, not a rewrite. **A practice task will
+settle it** — run one, look at the arena's "Recent decisions" row, and if it
+shows a different label than we sent, flip the var and redeploy.
+
+### Live verification (all against production, real secret)
+
+| Check | Result |
+|---|---|
+| `GET /agent` | 200 |
+| `GET /health` | 200 |
+| Signed preflight | 200 `{"ok":true,"protocolVersion":"v1"}` |
+| Gatekeeper task, fake `proof_tx` | 200 `APPROVE / VALID_PROOF`, 0.96s |
+| Gatekeeper task, **real on-chain `proof_tx`** | 200 `APPROVE / VALID_PROOF`, **5.3s** |
+| `findTransaction` on a real tx | **found**: block 5659006, index 0 |
+| Same `proof_tx`, new `task_id` | 200 `REJECT / PROOF_REPLAY` |
+
+### Tests: 65 (was 53) — all passing
+
+New: BLAKE2b-256 against the RFC 7693 vectors · the proof/public_signals echo
+· the reason-style switch · an expired-deadline task · a near-deadline task
+(answered well inside the window).
+
+### Gotcha learned the hard way
+
+The `editor` tool's `insert_line` **inserts BEFORE the given line** and
+repeatedly split functions in half (twice in `src/zkverify.js`), leaving
+unbalanced braces that `node --check` caught. **After any insert into a source
+file, run `node --check <file>`** — the tests will not even load otherwise.
+For a whole file, a heredoc via `run_commands` is more reliable than two
+edits.
+
+### Next steps
+
+1. **Run Practice tasks** — every trap type is reproducible, free, and it
+   settles the reason_code vocabulary. Watch the arena's "Recent decisions"
+   row for our task.
+2. Commit the Steal the VFY strategy on the dashboard → set `STRATEGY_COMMITMENT`.
+3. Optional: `wrangler secret put KURIER_API_KEY` to enable live Groth16
+   verification through Kurier (the platform's recommended path) — it also
+   produces the `proof_tx` the platform can confirm.
+
+---
+
 ## 2026-10-22 — Agent registered as "missi" · real secret installed · preflight verified
 
 **Status:** the agent is REGISTERED on the platform and live-verified with the

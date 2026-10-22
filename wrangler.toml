@@ -20,6 +20,17 @@ database_id = "3e45bef3-3b81-4f44-8e61-b3961fae49b4"
 # path, not just the root domain.
 AGENT_PATH = "/agent"
 
+# Which reason_code vocabulary to send.
+#   "canonical" (default) -> VALID_PROOF, PROOF_REPLAY, PUBLIC_INPUT_MISMATCH
+#                            (the rules page's "Canonical reason codes" table)
+#   "trap"                -> VALID_CONDITION, PROOF_REUSED, EXPIRED_CONDITION,
+#                            RECIPIENT_MISMATCH, AMOUNT_OVERFLOW
+#                            (the event page's trap labels, which the live arena
+#                            screen renders)
+# The platform documents both; which one it validates is settled by a practice
+# task. Switch with: wrangler deploy after editing this line.
+AGENT_REASON_STYLE = "canonical"
+
 # zkVerify mainchain RPC (public, no auth). Used to confirm that a task's
 # proof_tx really landed on chain.
 ZKVERIFY_RPC = "https://zkverify-rpc.zkverify.io"

@@ -30,6 +30,45 @@ export const REASON = {
   MISSING_VERIFICATION: "MISSING_VERIFICATION",
 };
 
+/**
+ * The trap labels the event page uses for the same seven situations.
+ *
+ * The platform documents BOTH vocabularies: the rules page lists a
+ * "Canonical reason codes" table (VALID_PROOF, PUBLIC_INPUT_MISMATCH, ...),
+ * while the event page's trap encyclopedia labels the traps VALID_CONDITION,
+ * PROOF_REUSED, EXPIRED_CONDITION, RECIPIENT_MISMATCH, AMOUNT_OVERFLOW.
+ *
+ * The canonical list is what the rules tell us to send, but the live arena
+ * screen renders the TRAP labels, and the arena is what the platform itself
+ * displays. Which one it validates is not observable from outside, so the
+ * vocabulary is switchable via the AGENT_REASON_STYLE var:
+ *
+ *   "canonical" (default) -> VALID_PROOF, PROOF_REPLAY, PUBLIC_INPUT_MISMATCH
+ *   "trap"                -> VALID_CONDITION, PROOF_REUSED, and the specific
+ *                            EXPIRED_CONDITION / RECIPIENT_MISMATCH /
+ *                            AMOUNT_OVERFLOW
+ *
+ * Switching is a one-line var change, so it can be corrected after a practice
+ * task shows which vocabulary the platform records.
+ */
+export const REASON_STYLE = {
+  CANONICAL: "canonical",
+  TRAP: "trap",
+};
+
+/** Map an internal verdict to the reason_code the platform records. */
+export function toReasonCode(verdict, style = REASON_STYLE.CANONICAL) {
+  if (style !== REASON_STYLE.TRAP) return verdict;
+  switch (verdict) {
+    case REASON.VALID:
+      return "VALID_CONDITION";
+    case REASON.PROOF_REPLAY:
+      return "PROOF_REUSED";
+    default:
+      return verdict;
+  }
+}
+
 /** Addresses are hex: compare case-insensitively and ignore the 0x prefix. */
 export function normAddress(v) {
   if (typeof v !== "string") return "";
@@ -61,6 +100,24 @@ export function pick(input, names) {
 
 export const reject = (reason_code) => ({ decision: "REJECT", reason_code });
 
+/**
+ * The specific trap behind a rejection, in the event page's trap vocabulary.
+ * Only the three "public input" traps need disambiguating: the canonical
+ * code PUBLIC_INPUT_MISMATCH covers all three, the trap labels do not.
+ */
+const TRAP = {
+  VALID: "VALID_CONDITION",
+  VK_SUBSTITUTION: "VK_SUBSTITUTION",
+  THRESHOLD_MISMATCH: "THRESHOLD_MISMATCH",
+  PROOF_REPLAY: "PROOF_REUSED",
+  EXPIRED_CONDITION: "EXPIRED_CONDITION",
+  RECIPIENT_MISMATCH: "RECIPIENT_MISMATCH",
+  AMOUNT_OVERFLOW: "AMOUNT_OVERFLOW",
+  PROOF_INVALID: "PROOF_INVALID",
+  CIRCUIT_MISMATCH: "CIRCUIT_MISMATCH",
+  MISSING_VERIFICATION: "MISSING_VERIFICATION",
+};
+
 
 /**
  * Decide a Proof Gatekeeper task.
@@ -71,12 +128,21 @@ export const reject = (reason_code) => ({ decision: "REJECT", reason_code });
  * @param {boolean} [opts.verificationOk]  a real zkVerify call confirmed the proof
  * @param {boolean} [opts.verificationFailed] a real zkVerify call rejected the proof
  * @param {string[]} [opts.knownVks]  other VK hashes known to be registered on-chain
- * @returns {{decision: "APPROVE"|"REJECT", reason_code: string}}
+ * @returns {{decision: "APPROVE"|"REJECT", reason_code: string, trap_code: string}}
  */
 export function decide(input, opts = {}) {
   const { isReplay = false, verificationOk = false, verificationFailed = false, knownVks = [] } = opts;
 
-  if (!input || typeof input !== "object" || Array.isArray(input)) return reject(REASON.PROOF_INVALID);
+  /** Reject with a canonical code and the matching specific trap label. */
+  const bad = (reason_code, trap) => ({
+    decision: "REJECT",
+    reason_code,
+    trap_code: trap ?? TRAP[reason_code] ?? reason_code,
+  });
+
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return bad(REASON.PROOF_INVALID, TRAP.PROOF_INVALID);
+  }
 
   const registeredVk = normAddress(pick(input, ["registered_vk", "registeredVk", "vk_hash"]));
   const proofVk = normAddress(pick(input, ["proof_vk", "proofVk"]));
@@ -85,49 +151,69 @@ export function decide(input, opts = {}) {
 
   // 1. Replay first (the trap's own checklist: "check the reference before any
   //    other validation"). A valid proof gains no re-entry by being resubmitted.
-  if (isReplay) return reject(REASON.PROOF_REPLAY);
+  if (isReplay) return bad(REASON.PROOF_REPLAY, TRAP.PROOF_REPLAY);
 
   // 2. Verification key substitution. A missing proof_vk is only tolerated when
   //    we could actually verify the proof against registered_vk (see zkverify.js);
   //    otherwise the condition cannot be compared at all.
   if (proofVk && registeredVk && proofVk !== registeredVk) {
     const isKnown = knownVks.map(normAddress).includes(proofVk);
-    return reject(isKnown ? REASON.CIRCUIT_MISMATCH : REASON.VK_SUBSTITUTION);
+    return bad(
+      isKnown ? REASON.CIRCUIT_MISMATCH : REASON.VK_SUBSTITUTION,
+      isKnown ? TRAP.CIRCUIT_MISMATCH : TRAP.VK_SUBSTITUTION,
+    );
   }
-  if (!proofVk && !verificationOk) return reject(REASON.PROOF_INVALID);
+  if (!proofVk && !verificationOk) return bad(REASON.PROOF_INVALID, TRAP.PROOF_INVALID);
 
   // 3. A verifiable on-chain reference must exist.
-  if (!proofTx) return reject(REASON.MISSING_VERIFICATION);
+  if (!proofTx) return bad(REASON.MISSING_VERIFICATION, TRAP.MISSING_VERIFICATION);
 
   // 4. The proof itself must verify. Only an actual failed verification call
   //    can produce this; we never reject on the mere absence of a call.
-  if (verificationFailed) return reject(REASON.PROOF_INVALID);
+  if (verificationFailed) return bad(REASON.PROOF_INVALID, TRAP.PROOF_INVALID);
 
   // 5. Threshold: the balance disclosed in the proof must meet the minimum.
   const minimum = toBig(pick(input, ["minimum", "min_threshold", "min"]));
   const publicBalance = toBig(pick(input, ["public_balance", "publicBalance", "balance"]));
-  if (minimum === null || publicBalance === null) return reject(REASON.PUBLIC_INPUT_MISMATCH);
-  if (publicBalance < minimum) return reject(REASON.THRESHOLD_MISMATCH);
+  if (minimum === null || publicBalance === null) {
+    return bad(REASON.PUBLIC_INPUT_MISMATCH, TRAP.AMOUNT_OVERFLOW);
+  }
+  if (publicBalance < minimum) {
+    return bad(REASON.THRESHOLD_MISMATCH, TRAP.THRESHOLD_MISMATCH);
+  }
 
   // 6. Expiry: an on-chain confirmation after the deadline does not revive the
   //    payment window.
   const expiry = toBig(pick(input, ["expiry_block", "expiryBlock"]));
   const current = toBig(pick(input, ["current_block", "currentBlock", "block_number"]));
-  if (expiry === null || current === null) return reject(REASON.PUBLIC_INPUT_MISMATCH);
-  if (current >= expiry) return reject(REASON.PUBLIC_INPUT_MISMATCH);
+  if (expiry === null || current === null) {
+    return bad(REASON.PUBLIC_INPUT_MISMATCH, TRAP.EXPIRED_CONDITION);
+  }
+  if (current >= expiry) {
+    return bad(REASON.PUBLIC_INPUT_MISMATCH, TRAP.EXPIRED_CONDITION);
+  }
 
   // 7. Recipient: the address committed in the proof must equal the one on the
   //    payment condition. Exact match, no prefixes.
   const recipient = normAddress(pick(input, ["recipient", "proof_recipient"]));
   const conditionRecipient = normAddress(pick(input, ["condition_recipient", "conditionRecipient"]));
-  if (!recipient || !conditionRecipient) return reject(REASON.PUBLIC_INPUT_MISMATCH);
-  if (recipient !== conditionRecipient) return reject(REASON.PUBLIC_INPUT_MISMATCH);
+  if (!recipient || !conditionRecipient) {
+    return bad(REASON.PUBLIC_INPUT_MISMATCH, TRAP.RECIPIENT_MISMATCH);
+  }
+  if (recipient !== conditionRecipient) {
+    return bad(REASON.PUBLIC_INPUT_MISMATCH, TRAP.RECIPIENT_MISMATCH);
+  }
 
   // 8. Amount: a valid balance proof does not override the transfer cap.
   const amount = toBig(pick(input, ["amount", "payment_amount"]));
   const maxTransfer = toBig(pick(input, ["max_transfer", "maxTransfer"]));
-  if (amount === null || maxTransfer === null) return reject(REASON.PUBLIC_INPUT_MISMATCH);
-  if (amount <= 0n || amount > maxTransfer) return reject(REASON.PUBLIC_INPUT_MISMATCH);
+  if (amount === null || maxTransfer === null) {
+    return bad(REASON.PUBLIC_INPUT_MISMATCH, TRAP.AMOUNT_OVERFLOW);
+  }
+  if (amount <= 0n || amount > maxTransfer) {
+    return bad(REASON.PUBLIC_INPUT_MISMATCH, TRAP.AMOUNT_OVERFLOW);
+  }
 
-  return { decision: "APPROVE", reason_code: REASON.VALID };
+  return { decision: "APPROVE", reason_code: REASON.VALID, trap_code: TRAP.VALID };
 }
+

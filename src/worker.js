@@ -34,6 +34,21 @@ import { buildTurnResponse, isVfyTurn } from "./vfy.js";
 
 const enc = new TextEncoder();
 
+/**
+ * How many milliseconds are left before the platform's deadline.
+ *
+ * The platform allows 60 seconds per task and states that late answers score
+ * as timeouts. We default to a conservative 30s when the deadline is absent or
+ * unparseable, so a malformed envelope can never turn into a timeout.
+ */
+function deadlineBudgetMs(task, fallbackMs = 30_000) {
+  const raw = task?.deadline_at ?? task?.deadlineAt;
+  if (!raw) return fallbackMs;
+  const at = Date.parse(raw);
+  if (!Number.isFinite(at)) return fallbackMs;
+  return at - Date.now();
+}
+
 /** Build a signed JSON response. */
 async function send(env, status, obj, keyForm = "text", prefix = "") {
   const body = enc.encode(JSON.stringify(obj));
@@ -59,37 +74,48 @@ async function send(env, status, obj, keyForm = "text", prefix = "") {
  *     zkVerify transaction
  *
  * A failure here is evidence, not a veto: the deterministic policy decides.
+ *
+ * @param {number} budgetMs hard ceiling for the whole verification step
  */
-async function verifyProof(env, input) {
+async function verifyProof(env, input, budgetMs = 12_000) {
   const registeredVk = pick(input, ["registered_vk", "registeredVk", "vk_hash"]);
   const proof = pick(input, ["proof", "groth16_proof", "proof_data"]);
   const publicSignals = pick(input, ["public_signals", "publicSignals", "public_inputs"]);
   const proofTx = pick(input, ["proof_tx", "proofTx"]);
 
   const result = { ok: false, failed: false, txHash: null, status: "not_attempted" };
+  const started = Date.now();
+  const left = () => budgetMs - (Date.now() - started);
 
-  if (proof && registeredVk) {
-    const kurier = await verifyViaKurier({
-      proof,
-      publicSignals,
-      registeredVk,
-      apiKey: env.KURIER_API_KEY,
-      apiBase: env.KURIER_API_BASE,
-    });
-    result.status = kurier.status;
-    result.ok = kurier.ok;
-    result.failed = kurier.status === "Failed" || kurier.status === "Invalid";
-    result.txHash = kurier.txHash ?? null;
-    return result;
-  }
+  try {
+    if (proof && registeredVk) {
+      const kurier = await verifyViaKurier({
+        proof,
+        publicSignals,
+        registeredVk,
+        apiKey: env.KURIER_API_KEY,
+        apiBase: env.KURIER_API_BASE,
+        // Never let Kurier eat the whole response window.
+        timeoutMs: Math.max(2000, Math.min(25_000, left() - 3000)),
+      });
+      result.status = kurier.status;
+      result.ok = kurier.ok;
+      result.failed = kurier.status === "Failed" || kurier.status === "Invalid";
+      result.txHash = kurier.txHash ?? null;
+      return result;
+    }
 
-  if (proofTx) {
-    const found = await findTransaction(proofTx, env.ZKVERIFY_RPC);
-    result.status = found ? "on_chain" : "not_found";
-    result.ok = Boolean(found);
-    // A proof reference that is nowhere on chain is a real signal, but we do
-    // not treat a lookup miss as proof invalid: the reference may predate our
-    // lookback window.
+    if (proofTx && left() > 1500) {
+      const found = await findTransaction(proofTx, env.ZKVERIFY_RPC);
+      result.status = found ? "on_chain" : "not_found";
+      result.ok = Boolean(found);
+      // A proof reference that is nowhere on chain is a real signal, but we do
+      // not treat a lookup miss as proof invalid: the reference may predate our
+      // lookback window.
+    }
+  } catch (err) {
+    result.status = "error";
+    result.reason = err?.message;
   }
 
   return result;
@@ -125,7 +151,12 @@ async function handleGatekeeper(env, task, keyForm, prefix) {
   const isFirstUse = await claimProofRef(db, mode, proofTx, taskId);
   const isReplay = proofTx ? !isFirstUse : false;
 
-  const verification = await verifyProof(env, input);
+  // The platform allows 60 seconds. Reserve a safety margin and give the
+  // verification step only what is left of it, so the answer always lands
+  // well inside the window.
+  const budgetMs = Math.max(0, Math.min(12_000, deadlineBudgetMs(task) - 1500));
+
+  const verification = await verifyProof(env, input, budgetMs);
 
   const verdict = decide(input, {
     isReplay,
@@ -134,10 +165,28 @@ async function handleGatekeeper(env, task, keyForm, prefix) {
     knownVks,
   });
 
+  // Which reason_code vocabulary the platform records. The rules page says
+  // "canonical"; the live arena screen renders the trap labels. Switchable
+  // with one var until a practice task shows which one it stores.
+  const style = env.AGENT_REASON_STYLE === "trap" ? "trap" : "canonical";
+  const reasonCode = style === "trap" ? verdict.trap_code : verdict.reason_code;
+
+  // The build guide: "Respond with the decision, a reason code, and — on every
+  // provable task — the Groth16 proof and its public_signals (an omitted or
+  // invalid proof costs −2)." The task payload carries the proof material the
+  // third party submitted, so we echo it back with our decision. The scoring
+  // model adds a further −2 for a provable task answered without a valid
+  // Groth16 proof, and the reliability bonus is pro-rated by the share of
+  // provable tasks whose proof verifies.
+  const proof = pick(input, ["proof", "groth16_proof", "proof_data"]);
+  const publicSignals = pick(input, ["public_signals", "publicSignals", "public_inputs"]);
+
   const response = {
     decision: verdict.decision,
-    reason_code: verdict.reason_code,
+    reason_code: reasonCode,
     ...(proofTx ? { proof_tx: proofTx } : {}),
+    ...(proof ? { proof } : {}),
+    ...(publicSignals ? { public_signals: publicSignals } : {}),
   };
 
   await saveAnswer(db, taskId, mode, JSON.stringify(response));

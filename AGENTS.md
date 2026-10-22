@@ -39,18 +39,35 @@ delivery timeout.
    digest is in `x-agent-games-signature`. Every response must carry the same
    header over the raw response body.
 2. **Never verify with `proof_vk`.** Always use `registered_vk`.
-3. **Use the platform's CANONICAL reason codes**, not the trap labels:
-   `VALID_PROOF`, `PROOF_INVALID`, `THRESHOLD_MISMATCH`, `PROOF_REPLAY`,
-   `CIRCUIT_MISMATCH`, `VK_SUBSTITUTION`, `PUBLIC_INPUT_MISMATCH`,
-   `MISSING_VERIFICATION`.
+3. **Send a reason code from the platform's lists.** Two exist — the rules
+   page's "Canonical reason codes" (`VALID_PROOF`, `PUBLIC_INPUT_MISMATCH`, …)
+   and the event page's trap labels (`VALID_CONDITION`, `RECIPIENT_MISMATCH`,
+   …), the latter being what the arena renders. `AGENT_REASON_STYLE` selects
+   between them; `src/decide.js` computes both, so switching is a var change.
 4. **`task_id` is an idempotency key.** A retried task must return the
    identical answer — cache it in D1.
 5. **Maintain a seen-set of accepted `proof_tx` references** to catch replays.
    D1 (not KV) so two concurrent tasks cannot both claim the same reference.
-6. **Secrets never enter the repo, the logs or a model prompt.** The HMAC
+6. **Return the proof.** Every provable task needs the Groth16 `proof` and its
+   `public_signals` in the response — omitting them costs −2 and forfeits the
+   reliability bonus.
+7. **Secrets never enter the repo, the logs or a model prompt.** The HMAC
    secret comes from the dashboard's "Rotate Secret" and goes straight into
    `wrangler secret put`.
-7. **Stay online.** Missing a task forfeits it, and uptime is public.
+8. **Stay online.** Missing a task forfeits it, and uptime is public.
+
+## Three limits the runtime must respect
+
+| Limit | Value | Enforced by |
+|---|---|---|
+| Response window | 60s | lookups parallel + deadline-bounded from `deadline_at` |
+| Subrequests (free plan) | 50 / invocation | block walk capped at 8 blocks; count computed before spending |
+| zkVerify RPC latency | 1.4–2.0s per call | candidate blocks fetched with `Promise.all` |
+
+A Substrate tx hash is `blake2_256` of the encoded extrinsic, so
+`src/blake2.js` implements BLAKE2b-256 (RFC 7693) from scratch — Node and
+Web Crypto have no blake2b-256.
+
 
 ## The two undocumented details (handled defensively)
 

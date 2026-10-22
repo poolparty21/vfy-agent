@@ -224,6 +224,65 @@ test("an unknown task type is a 400, not a 500", async () => {
   assert.equal(res.status, 400);
 });
 
+test("a task whose deadline already passed is still answered promptly", async () => {
+  // The envelope says the deadline is long gone. We must still return a
+  // well-formed decision rather than hanging on a verification lookup.
+  const task = gatekeeperTask({}, { task_id: "gk_expired", deadline_at: "2020-01-01T00:00:00Z" });
+  const started = Date.now();
+  const res = await postTo(env(), task);
+  const elapsed = Date.now() - started;
+  assert.equal(res.status, 200);
+  assert.ok(elapsed < 15_000, `took ${elapsed}ms — must not approach the 60s window`);
+  const body = await res.json();
+  assert.ok(body.decision === "APPROVE" || body.decision === "REJECT");
+});
+
+test("a task with a near deadline is answered well inside the window", async () => {
+  const task = gatekeeperTask({}, {
+    task_id: "gk_near_deadline",
+    deadline_at: new Date(Date.now() + 5000).toISOString(),
+  });
+  const started = Date.now();
+  const res = await postTo(env(), task);
+  const elapsed = Date.now() - started;
+  assert.equal(res.status, 200);
+  assert.ok(elapsed < 4500, `took ${elapsed}ms with a 5s deadline`);
+});
+
+test("the Groth16 proof and public signals are echoed back", async () => {
+  // The build guide requires the proof and its public_signals on every
+  // provable task: an omitted or invalid proof costs -2.
+  const task = gatekeeperTask(
+    {
+      proof: { pi_a: ["0x01", "0x02"], pi_b: [["0x03", "0x04"]], pi_c: [["0x05", "0x06"]], protocol: "groth16", curve: "bn128" },
+      public_signals: ["1460", "0xDe42000000000000000000000000000000009f01"],
+    },
+    { task_id: "gk_with_proof" },
+  );
+  const res = await postTo(env(), task);
+  const body = await res.json();
+  assert.equal(body.decision, "APPROVE");
+  assert.ok(body.proof, "the proof must be returned");
+  assert.deepEqual(body.proof.pi_a, ["0x01", "0x02"]);
+  assert.deepEqual(body.public_signals, ["1460", "0xDe42000000000000000000000000000000009f01"]);
+});
+
+test("the trap reason-code style can be switched with one setting", async () => {
+  const e = { ...env(), AGENT_REASON_STYLE: "trap" };
+  const task = gatekeeperTask({}, { task_id: "gk_trap_style" });
+  const raw = enc.encode(JSON.stringify(task));
+  const res = await worker.fetch(
+    new Request("https://example.test/agent", {
+      method: "POST",
+      headers: { [SECRET_HEADER]: await hmacHex(enc.encode(SECRET), raw) },
+      body: raw,
+    }),
+    e,
+  );
+  const body = await res.json();
+  assert.equal(body.reason_code, "VALID_CONDITION");
+});
+
 test("invalid JSON is a 400", async () => {
   const raw = enc.encode("{not json");
   const res = await worker.fetch(

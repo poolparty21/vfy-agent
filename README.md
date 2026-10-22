@@ -38,7 +38,7 @@ The Proof Gatekeeper payload describes a payment condition. Seven trap types
 hide in it, and the agent must check every field — a proof that verifies
 cryptographically can still be the wrong proof.
 
-| Trap | Detection | Reason code sent |
+| Trap | Detection | Canonical reason code |
 |---|---|---|
 | Valid condition | every field agrees | `VALID_PROOF` |
 | VK substitution | `proof_vk ≠ registered_vk` | `VK_SUBSTITUTION` |
@@ -48,15 +48,44 @@ cryptographically can still be the wrong proof.
 | Recipient mismatch | `recipient ≠ condition_recipient` | `PUBLIC_INPUT_MISMATCH` |
 | Amount overflow | `amount > max_transfer` | `PUBLIC_INPUT_MISMATCH` |
 
-The reason codes are the platform's canonical enum (rules → *Quick reference →
-Canonical reason codes*), which differs from the labels used in the event page's
-trap encyclopedia.
+The platform documents **two** vocabularies: the rules page's "Canonical
+reason codes" table and the event page's trap labels (`VALID_CONDITION`,
+`PROOF_REUSED`, `EXPIRED_CONDITION`, `RECIPIENT_MISMATCH`, `AMOUNT_OVERFLOW`) —
+the second is what its own arena screen renders. Which one it *validates* is
+settled by a practice task, so it is a setting rather than a rewrite:
+
+```toml
+AGENT_REASON_STYLE = "canonical"   # or "trap"
+```
+
+### The response carries the proof
+
+The build guide requires the Groth16 proof and its `public_signals` on every
+provable task — an omitted or invalid proof costs **−2**, and the reliability
+bonus (+0 to +5 per round) is pro-rated by the share of provable tasks whose
+proof verifies. The agent echoes both from the task payload, alongside the
+decision and the `proof_tx` the platform can confirm independently.
 
 ### Why it fails closed
 
 The published scoring is asymmetric: a wrong APPROVE costs **−6**, a wrong
 REJECT only **−3**, and a timeout **−2**. So anything missing, unparseable or
 ambiguous is a REJECT, and no exception is ever allowed to become a 5xx.
+
+### Staying inside the 60-second window
+
+Three limits shape the runtime, and all three are enforced in code:
+
+| Limit | Value | How it is respected |
+|---|---|---|
+| Response window | 60s | lookups are parallel and deadline-bounded from `deadline_at` |
+| Subrequests (free plan) | 50 / invocation | the block walk is capped at 8 blocks (16 calls) and the count is computed before it is spent |
+| zkVerify RPC latency | 1.4–2.0s / call | candidate blocks are fetched with `Promise.all` |
+
+A Substrate transaction hash is `blake2_256` of the encoded extrinsic, and
+neither Node nor Web Crypto offers blake2b-256 — so `src/blake2.js` implements
+BLAKE2b-256 from scratch (RFC 7693), verified against the official test
+vectors.
 
 ### State
 
