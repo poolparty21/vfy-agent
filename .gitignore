@@ -1,0 +1,14 @@
+# Secrets — never commit these
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+
+# Cloudflare
+.wrangler/
+node_modules/
+
+# OS / editor
+.DS_Store
+*.log

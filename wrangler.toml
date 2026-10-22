@@ -1,0 +1,36 @@
+name = "vfy-agent"
+main = "src/worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[observability]
+enabled = true
+
+# D1 holds the replay seen-set, the answer cache (idempotent retries) and the
+# Steal the VFY turn log. D1 rather than KV: the replay check needs strong
+# consistency, or two tasks with the same proof_tx could both be answered as
+# the first use.
+[[d1_databases]]
+binding = "DB"
+database_name = "vfy-agent"
+database_id = "3e45bef3-3b81-4f44-8e61-b3961fae49b4"
+
+[vars]
+# The path the platform POSTs tasks to. The dashboard wants the FULL handler
+# path, not just the root domain.
+AGENT_PATH = "/agent"
+
+# zkVerify mainchain RPC (public, no auth). Used to confirm that a task's
+# proof_tx really landed on chain.
+ZKVERIFY_RPC = "https://zkverify-rpc.zkverify.io"
+
+# Kurier REST base. The API key is a secret (see below), never a var.
+KURIER_API_BASE = "https://api.kurier.xyz/api/v1"
+
+# Public strategy commitment for the Steal the VFY event, registered on the
+# dashboard. The commitment hash is public by design; the secret is not.
+STRATEGY_COMMITMENT = ""
+
+# Secrets (set with `wrangler secret put`, never committed):
+#   AGENT_GAMES_HMAC_SECRET  - from the dashboard's "Rotate Secret"
+#   KURIER_API_KEY           - optional, enables live Groth16 verification
