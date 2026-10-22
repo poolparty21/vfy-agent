@@ -161,6 +161,27 @@ test("a GET on the registered agent path answers 200 (health check)", async () =
   assert.equal(body.protocolVersion, "v1");
 });
 
+test("HEAD and OPTIONS on the registered path also answer, not 404", async () => {
+  // The platform's safety/reachability check may probe with HEAD or OPTIONS
+  // before it delivers anything. A 404 there reads as an unsafe endpoint.
+  for (const method of ["HEAD", "OPTIONS"]) {
+    const res = await worker.fetch(
+      new Request("https://example.test/agent", { method }),
+      env(),
+    );
+    assert.notEqual(res.status, 404, `${method} must not 404 on the agent path`);
+    assert.ok(res.status < 400, `${method} must not fail the probe`);
+  }
+});
+
+test("the health path answers HEAD too", async () => {
+  const res = await worker.fetch(
+    new Request("https://example.test/health", { method: "HEAD" }),
+    env(),
+  );
+  assert.equal(res.status, 200);
+});
+
 test("a valid gatekeeper task is approved and signed", async () => {
   const res = await post(gatekeeperTask());
   assert.equal(res.status, 200);

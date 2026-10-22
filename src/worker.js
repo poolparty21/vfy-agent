@@ -275,7 +275,8 @@ export default {
     const url = new URL(request.url);
 
     // Health endpoint, unauthenticated, for uptime monitoring.
-    if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/")) {
+    if ((request.method === "GET" || request.method === "HEAD") &&
+        (url.pathname === "/health" || url.pathname === "/")) {
       return new Response(JSON.stringify({ ok: true, agent: "vfy-agent" }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -284,13 +285,22 @@ export default {
 
     const agentPath = env.AGENT_PATH ?? "/agent";
 
-    // The platform's health check may probe the REGISTERED endpoint with a
-    // plain GET, so that path must answer 200 even before a task arrives —
-    // a 404 here reads as an offline agent.
-    if (request.method === "GET" && url.pathname === agentPath) {
+    // The platform's safety/reachability check may probe the REGISTERED
+    // endpoint with GET, HEAD or OPTIONS before it ever delivers a task. A
+    // 404 on that path reads as an unreachable or unsafe endpoint, so every
+    // probe method answers 200 on the agent path.
+    if (url.pathname === agentPath && request.method !== "POST") {
+      const headers = { "content-type": "application/json" };
+      if (request.method === "OPTIONS") {
+        headers["access-control-allow-origin"] = "*";
+        headers["access-control-allow-methods"] = "GET, HEAD, POST, OPTIONS";
+        headers["access-control-allow-headers"] = "content-type, x-agent-games-signature";
+        headers["access-control-max-age"] = "86400";
+        return new Response(null, { status: 204, headers });
+      }
       return new Response(JSON.stringify({ ok: true, agent: "vfy-agent", protocolVersion: "v1" }), {
         status: 200,
-        headers: { "content-type": "application/json" },
+        headers,
       });
     }
 

@@ -38,9 +38,19 @@ ZKVERIFY_RPC = "https://zkverify-rpc.zkverify.io"
 # Kurier REST base. The API key is a secret (see below), never a var.
 KURIER_API_BASE = "https://api.kurier.xyz/api/v1"
 
-# Public strategy commitment for the Steal the VFY event, registered on the
-# dashboard. The commitment hash is public by design; the secret is not.
-STRATEGY_COMMITMENT = ""
+# Public strategy commitment for the Steal the VFY event.
+#
+# This MUST equal the "commitment hash" registered on the dashboard (Dashboard
+# -> My Agents -> Edit agent -> the Steal the VFY section), because the
+# platform independently recomputes policyProof.publicInputsHash from the game
+# state it knows and rejects any response whose hash diverges.
+#
+# It is a keccak256 over our policy descriptor:
+#   "zkverify-agent-games:v1-draft:max-extract:1"
+# The rules allow updating it between rounds, so it can be replaced once the
+# platform publishes the circuit artifacts and we can commit to a real
+# policy witness.
+STRATEGY_COMMITMENT = "0x36ef345db00480b9df269c28bfb6814d300c0afe9217d889cfee736a6bd6f6bc"
 
 # Secrets (set with `wrangler secret put`, never committed):
 #   AGENT_GAMES_HMAC_SECRET   - the first agent's secret (kept for the

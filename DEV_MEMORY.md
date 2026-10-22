@@ -2,6 +2,57 @@
 
 > Session log, newest first. Project contract: `AGENTS.md`. Workspace log: `C:\mnt\www\DEV_MEMORY.md`.
 
+### The commitment the owner must register (and the dashboard's three fields)
+
+The dashboard's Steal the VFY section needs a **commitment hash**, a **circuit
+version** and a **policy version**, and it refuses to save without them. The
+value below is what the agent now uses too — they MUST match, because the
+platform "independently computes this hash from the game state it knows and
+rejects any proof where the hashes diverge".
+
+| Field | Value |
+|---|---|
+| **Commitment hash** | `0x36ef345db00480b9df269c28bfb6814d300c0afe9217d889cfee736a6bd6f6bc` |
+| **Circuit version** | `v1-draft` |
+| **Policy version** | `1` |
+
+The commitment is `keccak256("zkverify-agent-games:v1-draft:max-extract:1")` —
+a deterministic hash over our policy descriptor (policy `max-extract`, version
+`1`, resolver `v1-draft`). It is set as `STRATEGY_COMMITMENT` in
+`wrangler.toml`, so the agent and the dashboard cannot drift apart.
+
+The rules permit changing it: *"You may redeploy and update your strategy
+commitment before each new round."* — so it can be replaced with a commitment
+over a real policy witness once the circuit artifacts are published.
+
+### 🔴 The VFY safety check rejected the endpoint BEFORE delivering
+
+Two practice dispatches (13:33:42Z, 13:33:56Z) failed with
+`FAILED (unsafe_endpoint)` / *"The endpoint was rejected by the safety checks.
+Use a public HTTPS URL — private, loopback, and non-HTTPS addresses are
+blocked."*
+
+**No request reached us** — the Worker tail shows nothing at those timestamps
+and D1 has no `vfy_turns` row for either match id. So this is a **pre-delivery
+check on the endpoint**, not a task we answered wrongly. Note the *hint* text
+is generic boilerplate; the endpoint was already proven reachable (preflight
+passed, gatekeeper practice returned "Correct decision", and the first VFY
+practice DID reach us and produced a parsed response).
+
+**A real bug found and fixed anyway:** `HEAD /agent` returned **404** (only
+GET and POST were routed). A reachability probe that uses HEAD would see 404
+and call the endpoint unsafe. Now:
+- `GET` / `HEAD` on `/agent` → 200
+- `OPTIONS` on `/agent` → 204 with CORS headers
+- `GET` / `HEAD` on `/` and `/health` → 200
+
+Also worth knowing: the workers.dev host resolves to **Cloudflare anycast
+IPs (104.21.15.193, 2606:4700:3031::6815:fc1)** — public addresses, so a
+naive "is the IP private?" check passes, but a checker that dislikes
+`*.workers.dev` or anycast ranges would not. If the safety check still
+fails, the fallback is a **custom domain** on a route we control. The account
+has no zones of its own for that, so it would need a domain we own.
+
 ---
 
 ## 2026-10-22 — VFY practice turn FAILED schema check · 3 more bugs fixed
