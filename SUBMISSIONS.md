@@ -21,29 +21,55 @@
 **Submission links**
 - `https://github.com/poolparty21/vfy-agent` (the agent, end to end)
 - `https://vfy-agent.hallo-alexa.workers.dev/agent` (the live public endpoint)
+- `https://vfy-agent.hallo-alexa.workers.dev/proof-reference` (the live proof
+  reference, re-verified on every request)
+
+**Proof reference (the checkable claim)**
+
+```
+0x52f943ec94d2adc0ee2554efc8540a52cefedfc6366012f26466f4fb831930ab
+```
+
+That is a real, finalized zkVerify mainchain transaction — a Groth16 proof
+submitted to `settlementGroth16Pallet.submitProof` in block **5664252**
+(`0xbf30d6b584d00d3636fbbef26d596179ab7d9e9619fbbe8095466dceba32c3a9`),
+extrinsic index 2. The chain acknowledged it with a `ProofVerified` event for
+statement `0x25ba6951…91b463`, against the on-chain registered verification key
+`0xeff0bb5f…3c24a10`.
+
+**What it establishes.** The agent confirms a proof transaction really landed
+on zkVerify's mainchain — it re-derives the transaction hash from the raw
+extrinsic bytes with its own from-scratch BLAKE2b-256 and checks the block is
+finalized. It does not trust the RPC's word for it.
+
+**How to check it, without running anything:**
+- Open `https://vfy-agent.hallo-alexa.workers.dev/proof-reference` — it
+  re-runs that check live and reports `ok: true` with the re-derived hash.
+- Or read it on a block explorer:
+  `https://zkverify.subscan.io/extrinsic/0x52f943ec94d2adc0ee2554efc8540a52cefedfc6366012f26466f4fb831930ab`
+- Or run it yourself from the repo: `node scripts/verify-proof-reference.mjs`
 
 **Supporting context**
 
-> **Problem.** A proof-verifying payment approver is only useful if it rejects
-> the proofs that verify but do not authorise. Most proofs in circulation verify
-> perfectly and still point at the wrong condition.
+> **Problem.** A proof-trusting payment approver is only useful if it rejects
+> proofs that verify but do not authorise. Most proofs verify perfectly and
+> still point at the wrong condition.
 >
 > **What it does.** `missi` receives a signed payment condition and decides
-> approve/reject. It checks all seven documented failure modes — key substitution,
-> threshold, replay, expiry, recipient, transfer cap — and fails closed, because
-> the published scoring punishes a wrong approval twice as hard as a wrong
-> rejection. It re-verifies the proof on zkVerify's mainchain, and it answers
-> within the live 15-second window.
+> approve/reject. It checks all seven documented failure modes — key
+> substitution, threshold, replay, expiry, recipient, transfer cap — and fails
+> closed: a wrong approval costs twice a wrong rejection. It re-verifies the
+> proof on zkVerify's mainchain and answers inside the live 15s window.
 >
-> **Key decisions.** HMAC-SHA256 is verified against the *raw* body, and every
-> response is signed with the secret that signed the request. The replay
-> seen-set lives in D1, not KV, so two concurrent tasks cannot both claim the
-> same proof reference. The public-inputs hash is computed with a
-> from-scratch BLAKE2b-256 and keccak-256 — no proof dependencies.
+> **Key decisions.** HMAC-SHA256 is verified against the *raw* body; each
+> response is signed with the same secret. The replay seen-set lives in D1, not
+> KV, so concurrent tasks cannot both claim one.
 >
-> **zkVerify.** The checkable claim is "this proof verifies against the
-> registered key" — confirmed on-chain, and the transaction reference is
-> returned for independent verification.
+> **zkVerify.** The checkable claim: "this proof verifies against the
+> registered key". Ref:
+> `0x52f943ec94d2adc0ee2554efc8540a52cefedfc6366012f26466f4fb831930ab`
+> (finalized block 5664252); the live `/proof-reference` endpoint re-verifies
+> it on demand.
 
 ---
 

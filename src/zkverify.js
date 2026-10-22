@@ -130,6 +130,84 @@ export async function findTransaction(txHash, rpcUrl = DEFAULT_RPC, lookback = L
 }
 
 /**
+ * Find a specific transaction inside a known block and re-derive its hash.
+ *
+ * `findTransaction` walks the last few blocks, which is right for a task that
+ * arrives seconds after its proof was published. A proof REFERENCE that is
+ * published for review is older than that, so it is looked up by the block
+ * number it was published in instead — the same way an explorer does it.
+ *
+ * The hash is re-derived with our own BLAKE2b-256 rather than trusted from
+ * the RPC, so the returned value is a real check and not an echo.
+ *
+ * @returns {Promise<{blockHash: string, blockNumber: number, index: number, derived: string}|null>}
+ */
+export async function findTransactionInBlock(proofTx, blockNumber, rpcUrl = DEFAULT_RPC) {
+  const hash = String(proofTx ?? "").trim().toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/.test(hash)) return null;
+  if (!Number.isInteger(blockNumber) || blockNumber < 0) return null;
+
+  const blockHash = await rpc(rpcUrl, "chain_getBlockHash", [blockNumber]);
+  if (!blockHash) return null;
+  const block = await rpc(rpcUrl, "chain_getBlock", [blockHash]);
+
+  const extrinsics = block?.block?.extrinsics ?? [];
+  for (let i = 0; i < extrinsics.length; i++) {
+    const ext = extrinsics[i];
+    if (typeof ext !== "string") continue;
+    const derived = blake2b256Hex(ext);
+    if (derived === hash) {
+      return { blockHash, blockNumber, index: i, derived };
+    }
+  }
+  return null;
+}
+
+/**
+ * Confirm the transaction is in a FINALIZED (not merely best) block.
+ *
+ * @returns {Promise<{finalized: boolean, headNumber: number}>}
+ */
+export async function isFinalized(blockNumber, rpcUrl = DEFAULT_RPC) {
+  const headNumber = await finalizedBlockNumber(rpcUrl);
+  return { finalized: blockNumber <= headNumber, headNumber };
+}
+
+/**
+ * Verify a published proof reference against zkVerify mainchain.
+ *
+ * This is the check behind the Wildcard submission's zkVerify claim: the
+ * transaction hash is RE-DERIVED from the raw extrinsic bytes with our own
+ * BLAKE2b-256 (not echoed from the RPC) and the containing block is checked
+ * against the finalized head.
+ *
+ * @returns {Promise<{ok: boolean, proofTx: string, blockNumber: number,
+ *   blockHash?: string, extrinsicIndex?: number, derivedHash?: string,
+ *   finalized?: boolean, finalizedHead?: number, error?: string}>}
+ */
+export async function verifyProofReference(proofTx, blockNumber, rpcUrl = DEFAULT_RPC) {
+  const hash = String(proofTx ?? "").trim().toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/.test(hash)) {
+    return { ok: false, proofTx: hash, blockNumber, error: "not a 32-byte transaction hash" };
+  }
+  const found = await findTransactionInBlock(hash, blockNumber, rpcUrl);
+  if (!found) {
+    return { ok: false, proofTx: hash, blockNumber, error: "transaction not found in that block" };
+  }
+  const { finalized, headNumber } = await isFinalized(blockNumber, rpcUrl);
+  return {
+    ok: finalized && found.derived === hash,
+    proofTx: hash,
+    blockNumber,
+    blockHash: found.blockHash,
+    extrinsicIndex: found.index,
+    derivedHash: found.derived,
+    finalized,
+    finalizedHead: headNumber,
+  };
+}
+
+/**
  * Submit a Groth16 proof to zkVerify through Kurier and wait for it to be
  * finalized on chain.
  *

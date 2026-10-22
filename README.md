@@ -12,10 +12,15 @@ a payment condition backed by a proof) and the **Steal the VFY** turn handler.
 ```
 POST https://vfy-agent.hallo-alexa.workers.dev/agent
 GET  https://vfy-agent.hallo-alexa.workers.dev/health
+GET  https://vfy-agent.hallo-alexa.workers.dev/proof-reference
 ```
 
 The dashboard requires the **full handler path**, so register
 `https://vfy-agent.hallo-alexa.workers.dev/agent` — not the root domain.
+
+`/proof-reference` is public and unsigned: it re-checks the proof transaction
+published in the Wildcard submission against zkVerify mainchain on every
+request, so a reviewer can confirm the claim without running anything.
 
 ## How it works
 
@@ -51,8 +56,11 @@ cryptographically can still be the wrong proof.
 The platform documents **two** vocabularies: the rules page's "Canonical
 reason codes" table and the event page's trap labels (`VALID_CONDITION`,
 `PROOF_REUSED`, `EXPIRED_CONDITION`, `RECIPIENT_MISMATCH`, `AMOUNT_OVERFLOW`) —
-the second is what its own arena screen renders. Which one it *validates* is
-settled by a practice task, so it is a setting rather than a rewrite:
+the second is what its own arena screen renders. The **canonical list is what
+the agent sends**: the rules page (which the platform calls "the authoritative
+source") says under "Quick reference → Canonical reason codes" — *"Use these as
+your `reason_code` values in Proof Gatekeeper responses."* The switch below
+stays as a one-line fallback:
 
 ```toml
 AGENT_REASON_STYLE = "canonical"   # or "trap"
@@ -87,6 +95,27 @@ neither Node nor Web Crypto offers blake2b-256 — so `src/blake2.js` implements
 BLAKE2b-256 from scratch (RFC 7693), verified against the official test
 vectors.
 
+### Checking the published proof reference
+
+The Wildcard submission publishes one real, finalized zkVerify mainchain
+transaction:
+
+```
+0x52f943ec94d2adc0ee2554efc8540a52cefedfc6366012f26466f4fb831930ab
+```
+
+a Groth16 proof submitted to `settlementGroth16Pallet.submitProof` in block
+5664252, acknowledged by the chain with a `ProofVerified` event. Check it with:
+
+```bash
+node scripts/verify-proof-reference.mjs
+```
+
+The script re-derives the transaction hash from the raw extrinsic bytes with
+this repo's own BLAKE2b-256 and checks the block is finalized — the same code
+path the agent uses at runtime. No dependencies, no API key. It is also served
+live at `GET /proof-reference`.
+
 ### State
 
 D1 (not KV — the replay check needs strong consistency):
@@ -101,7 +130,7 @@ D1 (not KV — the replay check needs strong consistency):
 ## Develop
 
 ```bash
-npm test          # 53 tests, no network access required
+npm test          # 86 tests, no network access required
 ```
 
 Deploy (always with the **global** wrangler — a Windows-installed
@@ -132,6 +161,7 @@ src/worker.js   the HTTP contract: routing, preflight, task handlers
 src/store.js    D1 access
 src/zkverify.js on-chain verification
 src/vfy.js      Steal the VFY turn responses, keccak-256
+scripts/verify-proof-reference.mjs   check the published proof reference
 ```
 
 See `AGENTS.md` for the project contract and `DEV_MEMORY.md` for the session log.

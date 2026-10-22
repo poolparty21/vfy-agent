@@ -12,18 +12,89 @@ rejects any proof where the hashes diverge".
 
 | Field | Value |
 |---|---|
-| **Commitment hash** | `0x36ef345db00480b9df269c28bfb6814d300c0afe9217d889cfee736a6bd6f6bc` |
+| **Commitment hash** | `0xf5a9f63b77aae9bde37211246d9a923026de3059faf48eef3fdf3a324014e1e2` |
 | **Circuit version** | `v1-draft` |
-| **Policy version** | `1` |
+| **Policy version** | `max-extract-v1` |
 
-The commitment is `keccak256("zkverify-agent-games:v1-draft:max-extract:1")` —
-a deterministic hash over our policy descriptor (policy `max-extract`, version
-`1`, resolver `v1-draft`). It is set as `STRATEGY_COMMITMENT` in
-`wrangler.toml`, so the agent and the dashboard cannot drift apart.
+⚠️ **This table was WRONG at the top of this file until 2026-10-23.** It
+carried an older commitment (`0x36ef345d…`, a keccak of a description string)
+and policy version `1`. The correct form, from the reference implementation's
+`scripts/commit.mjs`, is **`C = keccak256(W || R)`** — W = the policy witness
+(`extractCap` and `version`, each a 32-byte big-endian word), R = a private
+32-byte salt. `node scripts_commit.mjs` prints the three values above and
+reproduces them exactly; the salt is in `.strategy-salt` (gitignored, backed
+up in the workspace store) because without it the commitment cannot be
+reproduced. `STRATEGY_COMMITMENT` in `wrangler.toml` holds the same value, so
+the agent and the dashboard cannot drift apart.
 
 The rules permit changing it: *"You may redeploy and update your strategy
-commitment before each new round."* — so it can be replaced with a commitment
-over a real policy witness once the circuit artifacts are published.
+commitment before each new round."*
+
+### 2026-10-23 — ✅ A REAL, FINALIZED zkVerify PROOF REFERENCE (the blocker)
+
+The Wildcard submission needs a genuine 32-byte on-chain proof reference, and
+the practice `proof_tx` (`0x2aa1a964…`, 16 bytes) is synthetic — it must
+never be used. Found a real one:
+
+```
+0x52f943ec94d2adc0ee2554efc8540a52cefedfc6366012f26466f4fb831930ab
+```
+
+A Groth16 proof submitted to **`settlementGroth16Pallet.submitProof`** in block
+**5664252** (`0xbf30d6b584d00d3636fbbef26d596179ab7d9e9619fbbe8095466dceba32c3a9`),
+extrinsic index 2. The chain acknowledged it with a `ProofVerified` event for
+statement `0x25ba695155889be7a509883bd2a47926c2a6e2e9adf4a2aff8304ebc4591b463`,
+against the **on-chain registered** VK
+`0xeff0bb5fb5dde45258b16a9caa7db40371b456c85ea79f26a6225b7723c24a10`
+(confirmed present in `settlementGroth16Pallet.vks`). Subscan renders it as
+`Settlementgroth16pallet (Submit_proof)`, Result **Success**.
+
+**How it was found — and the trap that cost time.** The chain is a Substrate
+chain and `chain_getBlock` returns extrinsics as bare hex strings, so the
+transaction hash must be *computed* (blake2_256 of the encoded extrinsic),
+not read. The first attempt at storage-prefix derivation was **wrong**: the
+`twox128` in `/tmp` had a buggy `mergeRound`, so `twox128("System")` did not
+match the canonical `0x26aa394eea5630e07c48ae0c9558cef`. **Fix the hash
+against the known vector first** — `twox128("System") ++ twox128("Events")`
+must equal `0x26aa394eea5630e07c48ae0c9558cef780d41e5e16056765bc8461851072c9d7`.
+With that right, the pallet map fell out of the runtime metadata:
+`settlementGroth16Pallet` = index 161, `aggregate` = 81, `commonVerifiers` = 160.
+
+**The decisive cross-check.** `@polkadot/api` reports the transaction hash
+directly, and our own `src/blake2.js` produced the **identical** hash for the
+same extrinsic — so the from-scratch BLAKE2b-256 the agent depends on is
+confirmed against an independent implementation, not just against RFC vectors.
+
+**What shipped:**
+- `src/zkverify.js` — `findTransactionInBlock()` (lookup by block number, for
+  a reference too old for the 8-block task-time walk), `isFinalized()`,
+  `verifyProofReference()`.
+- `scripts/verify-proof-reference.mjs` — dependency-free, no API key:
+  `node scripts/verify-proof-reference.mjs`. It re-derives the hash from the
+  raw extrinsic bytes and checks the block is finalized.
+- `GET /proof-reference` on the live Worker — the same check, live, so a
+  reviewer can confirm the claim without running anything.
+- `test/proofref.test.js` — 7 new tests (86 total, all passing).
+
+**Also settled: the reason-code vocabulary.** The rules page (the platform
+calls it "the authoritative source") states under "Quick reference → Canonical
+reason codes": *"Use these as your `reason_code` values in Proof Gatekeeper
+responses."* So **canonical is correct** and `AGENT_REASON_STYLE` stays
+`"canonical"`. The trap table (`VALID_CONDITION`, `PROOF_REUSED`, …) is a
+separate descriptive list whose labels the arena renders; it is not a
+statement about the field the platform records. The switch is kept as a
+one-line fallback. (Found by extracting the rules page's own JS chunk —
+`/_next/static/chunks/25-fke1pt8t2a.js` — because the rendered HTML does not
+contain the table.)
+
+**Live verification (missi, rotated secret):** the preflight returns 200 with
+a correctly signed body, and a Proof Gatekeeper task carrying the real proof
+reference returns `{"decision":"APPROVE","reason_code":"VALID_PROOF"}`. The
+rotated secret authenticates end to end.
+
+⚠️ **Housekeeping:** the diagnostic probe rows were deleted from D1
+(`proof_refs` / `answers` where `task_id LIKE 'live_probe_%'`) — a probe
+reference in the seen-set would have made a real task look like a replay.
 
 ### 🔴 The VFY safety check rejected the endpoint BEFORE delivering
 

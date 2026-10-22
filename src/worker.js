@@ -29,10 +29,37 @@ import {
   getVfyTurn,
   saveVfyTurn,
 } from "./store.js";
-import { verifyViaKurier, findTransaction } from "./zkverify.js";
+import {
+  verifyViaKurier,
+  findTransaction,
+  verifyProofReference,
+  DEFAULT_RPC,
+} from "./zkverify.js";
 import { buildTurnResponse, fallbackTurnResponse, isVfyTurn } from "./vfy.js";
 
 const enc = new TextEncoder();
+
+/**
+ * The proof reference published in the Wildcard submission.
+ *
+ * It is a REAL, FINALIZED zkVerify mainchain transaction: a Groth16 proof
+ * submitted to the `settlementGroth16Pallet` verifier, which the chain
+ * acknowledged with a `ProofVerified` event.
+ *
+ * The claim it backs is narrow and checkable: "this agent confirms a proof
+ * transaction really landed on zkVerify's mainchain, by re-deriving the
+ * transaction hash from the raw extrinsic bytes and checking the block is
+ * finalized." The reference was verified against the same code path the
+ * agent uses at runtime (`src/zkverify.js` + `src/blake2.js`).
+ */
+const PROOF_REFERENCE = {
+  proofTx: "0x52f943ec94d2adc0ee2554efc8540a52cefedfc6366012f26466f4fb831930ab",
+  blockNumber: 5664252,
+  statement: "0x25ba695155889be7a509883bd2a47926c2a6e2e9adf4a2aff8304ebc4591b463",
+  vkHash: "0xeff0bb5fb5dde45258b16a9caa7db40371b456c85ea79f26a6225b7723c24a10",
+  call: "settlementGroth16Pallet.submitProof",
+  curve: "Bn254",
+};
 
 /**
  * Bounds for the optional zkVerify verification step.
@@ -311,6 +338,36 @@ export default {
           protocolVersion: "v1",
           endpoint: agentPath,
         }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    // A PUBLIC, UNSIGNED endpoint that lets a reviewer check the proof
+    // reference we publish in the Wildcard submission without running
+    // anything. It re-derives the transaction hash from the raw extrinsic
+    // bytes with our own BLAKE2b-256 and reports whether the block is
+    // FINALIZED — so the answer is a check, not a restatement.
+    //
+    // This is deliberately NOT the agent path: the platform's safety probe
+    // expects the agent path to behave in a specific way, and this one is
+    // for humans.
+    if (url.pathname === "/proof-reference" && request.method === "GET") {
+      const result = await verifyProofReference(
+        PROOF_REFERENCE.proofTx,
+        PROOF_REFERENCE.blockNumber,
+        env.ZKVERIFY_RPC || DEFAULT_RPC,
+      );
+      return new Response(
+        JSON.stringify(
+          {
+            ...PROOF_REFERENCE,
+            explorer: `https://zkverify.subscan.io/extrinsic/${PROOF_REFERENCE.proofTx}`,
+            verification: result,
+            verifyWith: "node scripts/verify-proof-reference.mjs",
+          },
+          null,
+          2,
+        ),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     }

@@ -38,18 +38,22 @@ export const REASON = {
  * while the event page's trap encyclopedia labels the traps VALID_CONDITION,
  * PROOF_REUSED, EXPIRED_CONDITION, RECIPIENT_MISMATCH, AMOUNT_OVERFLOW.
  *
- * The canonical list is what the rules tell us to send, but the live arena
- * screen renders the TRAP labels, and the arena is what the platform itself
- * displays. Which one it validates is not observable from outside, so the
- * vocabulary is switchable via the AGENT_REASON_STYLE var:
+ * **RESOLVED: send the canonical list.** The rules page — the page the
+ * platform calls "the authoritative source" — states under "Quick reference →
+ * Canonical reason codes": *"Use these as your `reason_code` values in Proof
+ * Gatekeeper responses."* The trap table is a separate, descriptive list; the
+ * arena rendering trap labels is the platform's own display, not a statement
+ * about the field it records. The rules table is explicit about the field
+ * name, so it wins.
+ *
+ * The switch stays because it costs nothing and the decision (not the reason
+ * code) is what the platform scores. `AGENT_REASON_STYLE = "trap"` remains
+ * available if a practice task ever contradicts this.
  *
  *   "canonical" (default) -> VALID_PROOF, PROOF_REPLAY, PUBLIC_INPUT_MISMATCH
  *   "trap"                -> VALID_CONDITION, PROOF_REUSED, and the specific
  *                            EXPIRED_CONDITION / RECIPIENT_MISMATCH /
  *                            AMOUNT_OVERFLOW
- *
- * Switching is a one-line var change, so it can be corrected after a practice
- * task shows which vocabulary the platform records.
  */
 export const REASON_STYLE = {
   CANONICAL: "canonical",

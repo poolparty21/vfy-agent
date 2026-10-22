@@ -86,10 +86,54 @@ src/worker.js   the HTTP contract: routing, preflight, task handlers
 src/store.js    D1 access: replay seen-set, answer cache, turn log
 src/zkverify.js on-chain verification (Kurier) + zkVerify RPC reads
 src/vfy.js      Steal the VFY turn responses, keccak-256
-test/           53 tests, no network access needed
+scripts/verify-proof-reference.mjs   re-check the published proof reference
+test/           86 tests, no network access needed
 schema.sql      D1 schema
 wrangler.toml   Worker config (D1 binding, vars; secrets are NOT here)
 ```
+
+## The published proof reference
+
+The Wildcard submission publishes one real, finalized zkVerify mainchain
+transaction:
+
+```
+0x52f943ec94d2adc0ee2554efc8540a52cefedfc6366012f26466f4fb831930ab
+```
+
+A Groth16 proof submitted to `settlementGroth16Pallet.submitProof` in block
+**5664252** (`0xbf30d6b5…32c3a9`), extrinsic index 2, acknowledged by the chain
+with a `ProofVerified` event for statement `0x25ba6951…91b463` against the
+on-chain registered VK `0xeff0bb5f…3c24a10`.
+
+It is checked three ways, all of which must agree:
+- `node scripts/verify-proof-reference.mjs` — no dependencies, no API key
+- `GET https://vfy-agent.hallo-alexa.workers.dev/proof-reference` — the same
+  check, live, for reviewers
+- `https://zkverify.subscan.io/extrinsic/<hash>` — an independent explorer
+
+⚠️ **Never substitute the practice `proof_tx`.** It is synthetic and only 16
+bytes. A real reference is 32 bytes and must resolve on chain.
+
+## How the zkVerify chain is read (no @polkadot/api in production)
+
+The runtime has **no dependencies** — the proof libraries are written from
+scratch. Reading the chain needs three things:
+
+1. **The pallet names.** `settlementGroth16Pallet` (index 161) is the Groth16
+   verifier; `aggregate` (81) holds the aggregation domain state. The names
+   live in the runtime metadata, not in the RPC.
+2. **`blake2_256` of the encoded extrinsic** = the transaction hash. That is
+   `src/blake2.js`; the RPC returns extrinsics as bare hex strings, so the
+   hash has to be computed, not read.
+3. **Storage prefixes** (`twox128`) if a storage map is read directly. The
+   canonical `System::Events` key is the test vector: `twox128("System") ++
+   twox128("Events")` must equal
+   `0x26aa394eea5630e07c48ae0c9558cef780d41e5e16056765bc8461851072c9d7`.
+
+For one-off investigation, `@polkadot/api` can be installed in the
+gitignored `.tooling/` directory — it is **not** a project dependency and
+must never end up in `package.json`.
 
 ## Commands
 

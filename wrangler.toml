@@ -22,13 +22,16 @@ AGENT_PATH = "/agent"
 
 # Which reason_code vocabulary to send.
 #   "canonical" (default) -> VALID_PROOF, PROOF_REPLAY, PUBLIC_INPUT_MISMATCH
-#                            (the rules page's "Canonical reason codes" table)
+#                            (the rules page's "Canonical reason codes" table,
+#                            which says: "Use these as your reason_code values
+#                            in Proof Gatekeeper responses")
 #   "trap"                -> VALID_CONDITION, PROOF_REUSED, EXPIRED_CONDITION,
 #                            RECIPIENT_MISMATCH, AMOUNT_OVERFLOW
 #                            (the event page's trap labels, which the live arena
 #                            screen renders)
-# The platform documents both; which one it validates is settled by a practice
-# task. Switch with: wrangler deploy after editing this line.
+# The canonical list is the documented answer for the `reason_code` FIELD; the
+# trap table is descriptive, and the arena rendering it is the platform's own
+# display. The switch stays as a one-line fallback.
 AGENT_REASON_STYLE = "canonical"
 
 # zkVerify mainchain RPC (public, no auth). Used to confirm that a task's
