@@ -97,6 +97,75 @@ Cloudflare anycast from the picture entirely. ⚠️ The wrangler OAuth token ha
 authentication scheme") — so a custom domain needs either a scoped API token
 or a DNS record created by the account owner.
 
+### 🔴🔴 ROOT CAUSE FOUND: "Unsupported state or unable to authenticate data"
+
+**The error string is from Node's `crypto.createDecipheriv`.** Proven by
+reproduction:
+
+```
+correct key  -> the-secret
+wrong key    -> Unsupported state or unable to authenticate data
+```
+
+So the platform is **decrypting** something and the AES-256-GCM auth tag does
+not verify. Per rules 1.3 the platform *"stores an AES-256-GCM encrypted copy
+to authenticate outbound task deliveries"* — it encrypts each agent's secret
+and decrypts it to sign outbound requests. **If that stored blob cannot be
+decrypted, every outbound delivery fails** — which is exactly what we see:
+the practice dispatch never reached us (no D1 row, no tail entry) and now
+preflight fails the same way.
+
+**The endpoint is NOT the problem.** Verified directly: both secrets verify
+against the live Worker (200 + correct response signature), TLS chain valid
+(`Verify return code: 0`), public anycast IPs, all probe methods 200. The
+failure is entirely platform-side.
+
+### The commitment I gave you was WRONG — and the format is now known
+
+The reference implementation (`zeel991/vk-sentinel`, a working Proof Gatekeeper
+agent) has `scripts/commit.mjs`, which prints the three values the platform
+expects:
+
+```js
+const witness = [POLICY.extractCap, Number(POLICY.version)].map(word);  // 32-byte words
+const commitment = keccak256(Buffer.concat([...witness, salt]));        // salt = 32 bytes
+console.log({ commitmentHash, circuitVersion: "v1-draft",
+              policyVersion: `${POLICY.name}-v${POLICY.version}` });
+```
+
+Two corrections to what I told you earlier:
+1. **The commitment is `keccak256(W || R)`** — the policy witness words
+   concatenated with a 32-byte private salt. My earlier value was a keccak of a
+   *description string*, which is not the expected form.
+2. **The policy version is `max-extract-v1`**, not `1` — the reference formats
+   it as `${POLICY.name}-v${POLICY.version}`.
+
+**Correct values (now also set in `wrangler.toml` as `STRATEGY_COMMITMENT`):**
+
+| Field | Value |
+|---|---|
+| **Commitment hash** | `0xf5a9f63b77aae9bde37211246d9a923026de3059faf48eef3fdf3a324014e1e2` |
+| **Circuit version** | `v1-draft` |
+| **Policy version** | `max-extract-v1` |
+
+The salt is stored in `.strategy-salt` (gitignored) and backed up in the
+workspace store as `VFY_STRATEGY_SALT` — **without it the commitment can never
+be reproduced**. Regenerate with `node scripts_commit.mjs`.
+
+### The likeliest trigger
+
+The owner entered the (wrong-format) commitment hash into the dashboard, the
+platform tried to store/verify it against its circuit, and the AES-GCM blob it
+holds for that agent no longer authenticates. Since the same failure now hits
+**preflight** for the agent being edited, the most probable cause is that the
+edit corrupted the platform's stored secret copy for that agent.
+
+**The decisive next step is to ROTATE the secret on the dashboard** (Dashboard
+→ My Agents → Edit agent → Rotate Secret). That regenerates the platform's
+encrypted copy from scratch. Give me the new one-time secret and I will add it
+to `AGENT_GAMES_HMAC_SECRETS` — the endpoint already supports several agents,
+and the old secret can stay in the list until the new one is confirmed.
+
 ---
 
 ## 2026-10-22 — VFY practice turn FAILED schema check · 3 more bugs fixed

@@ -45,12 +45,13 @@ KURIER_API_BASE = "https://api.kurier.xyz/api/v1"
 # platform independently recomputes policyProof.publicInputsHash from the game
 # state it knows and rejects any response whose hash diverges.
 #
-# It is a keccak256 over our policy descriptor:
-#   "zkverify-agent-games:v1-draft:max-extract:1"
-# The rules allow updating it between rounds, so it can be replaced once the
-# platform publishes the circuit artifacts and we can commit to a real
-# policy witness.
-STRATEGY_COMMITMENT = "0x36ef345db00480b9df269c28bfb6814d300c0afe9217d889cfee736a6bd6f6bc"
+# It is C = keccak256(W || R): W = the policy witness (extractCap and
+# version, each a 32-byte big-endian word), R = a private 32-byte salt kept in
+# .strategy-salt (gitignored). Regenerate with: node scripts_commit.mjs
+#
+# The rules allow updating it between rounds, so it can be recomputed once the
+# platform publishes the circuit artifacts and the real Hash(W, R) is known.
+STRATEGY_COMMITMENT = "0xf5a9f63b77aae9bde37211246d9a923026de3059faf48eef3fdf3a324014e1e2"
 
 # Secrets (set with `wrangler secret put`, never committed):
 #   AGENT_GAMES_HMAC_SECRET   - the first agent's secret (kept for the

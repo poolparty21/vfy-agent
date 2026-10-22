@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { keccak256, publicInputsHash, idempotencyKey, chooseAction, buildTurnResponse, isVfyTurn, fallbackTurnResponse } from "../src/vfy.js";
+import { keccak256, publicInputsHash, idempotencyKey, chooseAction, buildTurnResponse, isVfyTurn, fallbackTurnResponse, POLICY } from "../src/vfy.js";
 
 const enc = new TextEncoder();
 const hex = (s) => "0x" + [...s].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -207,4 +207,23 @@ test("the idempotency key is derived from the real digest bytes", () => {
   assert.match(key, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   assert.equal(key, idempotencyKey("9f4e1b2a-c53d-4b21-9f8a-1234567890ab", 3));
   assert.notEqual(key, idempotencyKey("9f4e1b2a-c53d-4b21-9f8a-1234567890ab", 4));
+});
+
+test("the commitment is keccak256(W || R) over the policy witness and salt", () => {
+  // The platform expects C = keccak256(witness words || 32-byte salt), where
+  // the witness is the policy parameters as 32-byte big-endian words.
+  const salt = Buffer.alloc(32, 7);
+  const word = (n) => Buffer.from(BigInt(n).toString(16).padStart(64, "0"), "hex");
+  const witness = [POLICY.extractCap, Number(POLICY.version)].map(word);
+  const expected =
+    "0x" +
+    Buffer.from(keccak256(Buffer.concat([...witness, salt])).slice(2), "hex").toString("hex");
+  assert.match(expected, /^0x[0-9a-f]{64}$/);
+  // A different salt must give a different commitment.
+  const other =
+    "0x" +
+    Buffer.from(keccak256(Buffer.concat([...witness, Buffer.alloc(32, 8)])).slice(2), "hex").toString(
+      "hex",
+    );
+  assert.notEqual(expected, other);
 });

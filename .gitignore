@@ -12,3 +12,6 @@ node_modules/
 # OS / editor
 .DS_Store
 *.log
+
+# The private strategy salt for the Steal the VFY commitment. Never commit it.
+.strategy-salt
