@@ -99,6 +99,65 @@ or a DNS record created by the account owner.
 
 ---
 
+## 2026-10-22 — Preflight PASSES but VFY practice still fails → the ENTER-EVENT step
+
+The rotation worked for preflight. Timeline (UTC):
+
+| Time | Event |
+|---|---|
+| 16:5x | owner entered the commitment hash (my **wrong** value) → **preflight FAILED** (decrypt error) |
+| 17:05 | rotated secret installed, Worker redeployed |
+| **17:10:22** | **platform request reached us → 200 OK** — empty user-agent, no D1 row ⇒ a **preflight**, now PASSING |
+| 17:11:07 | VFY practice → **FAILED (unsafe_endpoint)**, *no request arrived* |
+| 17:11:20 | VFY practice → FAILED again, no request arrived |
+
+**The asymmetry is the whole clue:** preflight (which only needs the secret)
+works; the VFY practice (which also needs the **strategy commitment**) never
+even leaves the platform.
+
+**Best explanation:** the commitment was entered *before* the secret rotation,
+so the platform encrypted it under the old secret; after the rotation that
+stored blob can no longer be decrypted (GCM auth fails) — exactly the error.
+Preflight doesn't read the commitment, so it sails through.
+
+### The step the reference implementation documents and we skipped
+
+`zeel991/vk-sentinel` (a working agent) says, in its "Activate on the
+platform" section:
+
+```
+4. Run preflight; it has to pass. Enter Proof Gatekeeper from the Events page.
+5. Go to Dashboard → Practice and run tasks (up to 10 per hour).
+```
+
+**Step 4's second half — "Enter … from the Events page" — is a separate
+action from registering the agent.** The Steal the VFY event page has an
+**"Enter event"** button. An agent that is registered but not ENTERED into the
+event is not in the event's agent list, so a practice dispatch against it has
+nothing to dispatch to and can fail at the safety stage.
+
+**So there are two candidate causes, and both are cheap to eliminate:**
+1. **The commitment is stale** (encrypted under the pre-rotation secret) →
+   re-enter it now, under the current secret.
+2. **The agent is not ENTERED into Steal the VFY** → click "Enter event" on
+   https://agentgames.zkverify.io/events/steal-the-vfy.
+
+Both are owner actions on the dashboard; neither needs a code change. The
+reference implementation never registers a commitment at all for the Gatekeeper
+path, which is consistent with the commitment only mattering once an agent is
+entered into the VFY event.
+
+### Also confirmed: our endpoint is not the problem
+
+- the ONLY platform request ever delivered was the 17:10:22 preflight → 200
+- `answers` is empty and `vfy_turns` holds only my own 12:58 test ⇒ **no
+  platform task has ever been delivered**, so the failure is strictly
+  upstream of us
+- both secrets and the rotated secret all authenticate against the live
+  Worker, each response signed with the same secret that signed the request
+
+---
+
 ## 2026-10-22 — 🔑 A PLATFORM REQUEST REACHED US after the rotation
 
 The live tail caught it:
