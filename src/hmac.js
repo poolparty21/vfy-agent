@@ -36,6 +36,25 @@ export function keyForms(secret) {
   return forms;
 }
 
+/**
+ * The set of secrets this endpoint accepts.
+ *
+ * The platform issues a SEPARATE one-time secret per registered agent
+ * ("Rotate Secret" on the agent's own settings page). Several agents can
+ * point at one endpoint, so the secret is a LIST: a comma-separated
+ * `AGENT_GAMES_HMAC_SECRETS`, with the single `AGENT_GAMES_HMAC_SECRET` kept
+ * working for the one-agent case.
+ */
+export function secretList(env) {
+  const raw = [
+    ...String(env.AGENT_GAMES_HMAC_SECRETS ?? "").split(","),
+    env.AGENT_GAMES_HMAC_SECRET ?? "",
+  ]
+    .map((s) => String(s).trim())
+    .filter(Boolean);
+  return [...new Set(raw)];
+}
+
 /** HMAC-SHA256 hex digest of `bytes` under `keyBytes`. */
 export async function hmacHex(keyBytes, bytes) {
   const key = await crypto.subtle.importKey(
@@ -70,6 +89,30 @@ export async function verifySignature(secret, rawBody, headerValue) {
     if (safeEqual(expected, digest)) return { ok: true, keyForm: form, prefix };
   }
   return { ok: false, keyForm: "text", prefix };
+}
+
+/**
+ * Verify a request signature against ANY of the accepted secrets.
+ *
+ * @param {string[]} secrets  the accepted secrets
+ * @param {Uint8Array} rawBody  the raw request body
+ * @param {string} headerValue  the `x-agent-games-signature` header
+ * @returns {Promise<{ok: boolean, keyForm: string, prefix: string, secret: string}>}
+ *   `keyForm`/`prefix` describe the form that verified, so responses can
+ *   mirror it; `secret` is the secret that matched (for multi-agent setups).
+ */
+export async function verifySignatureAny(secrets, rawBody, headerValue) {
+  const { prefix, digest } = parseSignature(headerValue);
+  if (!digest) return { ok: false, keyForm: "text", prefix, secret: "" };
+  for (const secret of secrets) {
+    for (const { form, key } of keyForms(secret)) {
+      const expected = await hmacHex(key, rawBody);
+      if (safeEqual(expected, digest)) {
+        return { ok: true, keyForm: form, prefix, secret };
+      }
+    }
+  }
+  return { ok: false, keyForm: "text", prefix, secret: "" };
 }
 
 /** Produce a response signature header, mirroring the form used by the platform. */

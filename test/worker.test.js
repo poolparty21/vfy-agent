@@ -283,6 +283,47 @@ test("the trap reason-code style can be switched with one setting", async () => 
   assert.equal(body.reason_code, "VALID_CONDITION");
 });
 
+test("several agents can share one endpoint, each with its own secret", async () => {
+  // The platform issues a separate one-time secret per registered agent.
+  const OTHER = "a".repeat(64);
+  const e = { ...env(), AGENT_GAMES_HMAC_SECRETS: `${OTHER},${SECRET}` };
+  const task = gatekeeperTask({}, { task_id: "gk_second_agent" });
+  const raw = enc.encode(JSON.stringify(task));
+
+  // The SECOND secret alone must be accepted.
+  const res = await worker.fetch(
+    new Request("https://example.test/agent", {
+      method: "POST",
+      headers: { [SECRET_HEADER]: await hmacHex(enc.encode(OTHER), raw) },
+      body: raw,
+    }),
+    e,
+  );
+  assert.equal(res.status, 200);
+
+  // And the response must be signed with THAT secret, not the other one.
+  const responseSig = res.headers.get(SECRET_HEADER);
+  const body = await res.text();
+  const expected = await hmacHex(enc.encode(OTHER), enc.encode(body));
+  assert.equal(responseSig, expected, "response must be signed with the secret that was used");
+  assert.equal(JSON.parse(body).decision, "APPROVE");
+});
+
+test("a secret that is not on the list is rejected", async () => {
+  const e = { ...env(), AGENT_GAMES_HMAC_SECRETS: "b".repeat(64) };
+  const task = gatekeeperTask({}, { task_id: "gk_wrong_secret" });
+  const raw = enc.encode(JSON.stringify(task));
+  const res = await worker.fetch(
+    new Request("https://example.test/agent", {
+      method: "POST",
+      headers: { [SECRET_HEADER]: await hmacHex(enc.encode("c".repeat(64)), raw) },
+      body: raw,
+    }),
+    e,
+  );
+  assert.equal(res.status, 401);
+});
+
 test("invalid JSON is a 400", async () => {
   const raw = enc.encode("{not json");
   const res = await worker.fetch(

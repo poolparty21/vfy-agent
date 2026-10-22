@@ -43,5 +43,12 @@ KURIER_API_BASE = "https://api.kurier.xyz/api/v1"
 STRATEGY_COMMITMENT = ""
 
 # Secrets (set with `wrangler secret put`, never committed):
-#   AGENT_GAMES_HMAC_SECRET  - from the dashboard's "Rotate Secret"
-#   KURIER_API_KEY           - optional, enables live Groth16 verification
+#   AGENT_GAMES_HMAC_SECRET   - the first agent's secret (kept for the
+#                                single-agent case)
+#   AGENT_GAMES_HMAC_SECRETS  - comma-separated list, when SEVERAL agents
+#                                share this one endpoint. The platform issues a
+#                                separate one-time secret per agent, and a
+#                                request is signed with whichever agent's
+#                                secret it used — the response is signed back
+#                                with that same secret.
+#   KURIER_API_KEY            - optional, enables live Groth16 verification

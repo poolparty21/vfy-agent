@@ -18,7 +18,7 @@
 // rather than a 5xx (a 5xx is recorded as a delivery timeout, which costs -2;
 // a REJECT costs at most -3 but keeps the contract intact).
 
-import { verifySignature, signBody, SECRET_HEADER } from "./hmac.js";
+import { verifySignatureAny, signBody, secretList, SECRET_HEADER } from "./hmac.js";
 import { decide, REASON, normAddress, pick } from "./decide.js";
 import {
   claimProofRef,
@@ -49,12 +49,17 @@ function deadlineBudgetMs(task, fallbackMs = 30_000) {
   return at - Date.now();
 }
 
-/** Build a signed JSON response. */
-async function send(env, status, obj, keyForm = "text", prefix = "") {
+/**
+ * Build a signed JSON response.
+ *
+ * `secret` is the secret the request was verified with. Several agents can
+ * share one endpoint, each with its own secret, so the response has to be
+ * signed with the SAME secret the platform used — not just any of them.
+ */
+async function send(env, status, obj, { keyForm = "text", prefix = "", secret } = {}) {
   const body = enc.encode(JSON.stringify(obj));
-  const signature = env.AGENT_GAMES_HMAC_SECRET
-    ? await signBody(env.AGENT_GAMES_HMAC_SECRET, body, { keyForm, prefix })
-    : "";
+  const key = secret ?? env.AGENT_GAMES_HMAC_SECRET;
+  const signature = key ? await signBody(key, body, { keyForm, prefix }) : "";
   return new Response(body, {
     status,
     headers: {
@@ -123,7 +128,7 @@ async function verifyProof(env, input, budgetMs = 12_000) {
 
 
 /** Handle one Proof Gatekeeper task. */
-async function handleGatekeeper(env, task, keyForm, prefix) {
+async function handleGatekeeper(env, task, sign) {
   const db = env.DB;
   const taskId = String(task.task_id ?? "");
   const mode = task.mode === "competition" ? "competition" : "practice";
@@ -132,7 +137,7 @@ async function handleGatekeeper(env, task, keyForm, prefix) {
   const cached = await getAnswer(db, taskId);
   if (cached) {
     console.log(JSON.stringify({ event: "proof-gatekeeper", taskId, mode, replay: "cached" }));
-    return send(env, 200, JSON.parse(cached), keyForm, prefix);
+    return send(env, 200, JSON.parse(cached), sign);
   }
 
   const input = task.input ?? {};
@@ -201,12 +206,12 @@ async function handleGatekeeper(env, task, keyForm, prefix) {
       verification: verification.status,
     }),
   );
-  return send(env, 200, response, keyForm, prefix);
+  return send(env, 200, response, sign);
 }
 
 
 /** Handle one Steal the VFY turn. */
-async function handleVfyTurn(env, task, keyForm, prefix) {
+async function handleVfyTurn(env, task, sign) {
   const db = env.DB;
   const matchId = String(task.matchId ?? "");
   const turn = Number(task.turn ?? 0);
@@ -214,7 +219,7 @@ async function handleVfyTurn(env, task, keyForm, prefix) {
   const cached = await getVfyTurn(db, matchId, turn);
   if (cached) {
     console.log(JSON.stringify({ event: "steal-the-vfy", matchId, turn, replay: "cached" }));
-    return send(env, 200, JSON.parse(cached), keyForm, prefix);
+    return send(env, 200, JSON.parse(cached), sign);
   }
 
   const response = buildTurnResponse(task, new Date(), env.STRATEGY_COMMITMENT);
@@ -226,7 +231,7 @@ async function handleVfyTurn(env, task, keyForm, prefix) {
     response: JSON.stringify(response),
   });
   console.log(JSON.stringify({ event: "steal-the-vfy", matchId, turn, action: response.action }));
-  return send(env, 200, response, keyForm, prefix);
+  return send(env, 200, response, sign);
 }
 
 export default {
@@ -257,19 +262,20 @@ export default {
       return new Response(null, { status: 404 });
     }
 
-    if (!env.AGENT_GAMES_HMAC_SECRET) {
+    const secrets = secretList(env);
+    if (secrets.length === 0) {
       return new Response("secret not configured", { status: 500 });
     }
 
     // Verify the signature against the RAW body, before parsing anything.
     const raw = new Uint8Array(await request.arrayBuffer());
     const header = request.headers.get(SECRET_HEADER) ?? "";
-    const { ok, keyForm, prefix } = await verifySignature(env.AGENT_GAMES_HMAC_SECRET, raw, header);
+    const { ok, keyForm, prefix, secret } = await verifySignatureAny(secrets, raw, header);
     if (!ok) {
       // Lengths only, never values: enough to spot a bad paste vs a scheme
       // mismatch without echoing anything secret.
       console.warn(
-        `bad signature (secret length ${String(env.AGENT_GAMES_HMAC_SECRET).trim().length}, signature length ${header.trim().length})`,
+        `bad signature (accepted secrets ${secrets.length}, signature length ${header.trim().length})`,
       );
       return send(env, 401, { error: "invalid signature" });
     }
@@ -278,21 +284,21 @@ export default {
     try {
       task = JSON.parse(new TextDecoder().decode(raw));
     } catch {
-      return send(env, 400, { error: "invalid json" }, keyForm, prefix);
+      return send(env, 400, { error: "invalid json" }, { keyForm, prefix, secret });
     }
 
     try {
       if (task.type === "agent-games.preflight.v1") {
-        return send(env, 200, { ok: true, protocolVersion: "v1" }, keyForm, prefix);
+        return send(env, 200, { ok: true, protocolVersion: "v1" }, { keyForm, prefix, secret });
       }
       if (task.type === "agent-games.proof-gatekeeper.v1") {
-        return handleGatekeeper(env, task, keyForm, prefix);
+        return handleGatekeeper(env, task, { keyForm, prefix, secret });
       }
       if (isVfyTurn(task)) {
-        return handleVfyTurn(env, task, keyForm, prefix);
+        return handleVfyTurn(env, task, { keyForm, prefix, secret });
       }
       console.warn("unknown task type", task.type, JSON.stringify(Object.keys(task)));
-      return send(env, 400, { error: "unsupported task type" }, keyForm, prefix);
+      return send(env, 400, { error: "unsupported task type" }, { keyForm, prefix, secret });
     } catch (err) {
       console.error("handler error:", err?.message);
       // Fail closed with a well-formed answer rather than a 5xx.
@@ -300,8 +306,7 @@ export default {
         env,
         200,
         { decision: "REJECT", reason_code: REASON.PROOF_INVALID },
-        keyForm,
-        prefix,
+        { keyForm, prefix, secret },
       );
     }
   },

@@ -4,6 +4,105 @@
 
 ---
 
+## 2026-10-22 — Multi-agent support: one endpoint, several agents, one secret each
+
+**Owner ask:** *"i can register 3 agents should i register the steal agent too? i
+just click practise or i need you for that?"*
+
+### The blocker found and fixed BEFORE it could bite
+
+The platform issues a **separate one-time secret per registered agent** ("Rotate
+Secret" is on the agent's OWN settings page). The Worker accepted exactly ONE
+secret, so a second agent pointed at the same endpoint would have been
+**rejected with 401 on every single task** — and the owner would have had no
+idea why ("it works for missi but not for the other one").
+
+Fixed: the Worker now accepts a **list** of secrets.
+- `AGENT_GAMES_HMAC_SECRETS` — comma-separated, for several agents on one
+  endpoint. `AGENT_GAMES_HMAC_SECRET` still works for the single-agent case.
+- A request is verified against **every** accepted secret; the response is
+  then signed with **the same secret the request used** (not just any of them)
+  — that is what makes the platform accept the response.
+- Tests cover it: a second secret alone is accepted, the response signature
+  matches THAT secret, and an unlisted secret is still a 401.
+- **67 tests, all passing.** Deployed and regression-tested live (the original
+  secret still preflights 200).
+
+To add an agent later:
+```bash
+/home/unexpected/.npm-global/bin/wrangler secret put AGENT_GAMES_HMAC_SECRETS
+# value: <secret1>,<secret2>,<secret3>
+```
+
+### Registering the Steal the VFY agent: YES, but it is NOT ready yet
+
+**One agent per owner in this event** — that is per EVENT, so three agents in
+three different events is fine. Registering the VFY agent costs nothing and
+locks in a slot.
+
+But the VFY event has a hard pre-tournament requirement we do **not** yet
+satisfy:
+- *"Before Swiss Round 1 opens, register an active **strategy commitment** …
+  from Dashboard → My Agents → Edit agent (the Steal the VFY section). This
+  commits a hash of your policy circuit … You cannot enter the tournament
+  without it."*
+- The commitment hash goes into `STRATEGY_COMMITMENT` in `wrangler.toml`.
+- **"Circuit artifacts are being prepared — check back before the first scored
+  round opens."** The `.zkey`/`.wasm` are not published, so the per-turn Groth16
+  policy proof cannot be generated yet.
+- The platform **selects the circuit and VK — entrants cannot supply their
+  own**, so there is no workaround; we wait for the artifacts.
+- Without a valid proof, *"Missing or invalid responses substitute HOLD with
+  a reliability penalty."* So entering without a working prover is actively
+  harmful — better to register and stay unpaired until the artifacts land.
+
+**Recommendation: register the VFY agent now (it is free and reserves the
+slot), but do NOT commit a strategy or enter a round until the circuit
+artifacts are published.** Then we compute the commitment hash, set
+`STRATEGY_COMMITMENT`, and wire the prover.
+
+### Practice: the owner clicks, I watch
+
+The owner does **not** need me to click anything — Practice is a dashboard
+button that dispatches a real task to our endpoint, and the agent answers
+automatically.
+
+What I CAN do is **watch it happen**: `wrangler tail` attaches to the live
+Worker and shows every inbound task and outbound response. Verified working
+("Connected to vfy-agent, waiting for logs…"). So the owner can click Practice
+and simply say "go" — the logs show exactly what the platform sent, what we
+answered, and how long it took, with no dashboard access needed.
+
+This is also how the **reason_code vocabulary** gets settled: run one practice
+task, and compare the arena's "Recent decisions" label against what we sent.
+
+### The Steal the VFY turn contract (extracted for when the artifacts land)
+
+Turn envelope: `{protocolVersion, eventId: "steal-the-vfy", matchId, turn,
+issuedAt, deadlineAt, state: {selfBalance, opponentBalance,
+selfFortifiedUntilTurn, opponentFortifiedUntilTurn}, strategyCommitment: {hash},
+resolverVersion, nonce}`.
+
+Response: `{matchId, turn, action: {type, amount?}, policyProof: {circuitVersion,
+publicInputsHash, proof, public_signals}, agentTimestamp, idempotencyKey}`.
+
+`publicInputsHash` = keccak256 over 8 ABI-packed 32-byte words, in this order:
+commitment, matchId (hex, dashes stripped), turn, selfBalance,
+opponentBalance, actionCode, amount (0 unless EXTRACT), circuitVersionCode
+(`v1-draft` → 1). Implemented in `src/vfy.js` with a dependency-free keccak-256,
+verified against the standard vectors.
+
+Policy (from the published resolver numbers — FORTIFY costs 2 and blocks up to
+6, EXTRACT takes up to 10): EXTRACT at the cap is never worse than any
+alternative, so always extract the maximum while the opponent has anything to
+take; HOLD when the opponent is empty. `amount` must be **omitted entirely**
+for HOLD/FORTIFY — the schema rejects the field even when it is 0.
+
+`src/vfy.js` already implements all of this; only the circuit-backed proof is
+missing.
+
+---
+
 ## 2026-10-22 — Agent REGISTERED as "missi" · preflight PASSED · 3 bugs found & fixed
 
 **Status:** the agent is registered and **preflight passed** ("Preflight OK —
