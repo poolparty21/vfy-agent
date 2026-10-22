@@ -4,6 +4,66 @@
 
 ---
 
+## 2026-10-22 — Where the Practice button is · two more multi-agent bugs found & fixed
+
+**Owner ask:** *"same repo and endpoint? i dont find the practise button maybe i
+clicked it?"*
+
+### Answer 1: same repo, same endpoint — for all three agents
+
+YES. One repo (`poolparty21/vfy-agent`), one Worker, one endpoint URL
+(`https://vfy-agent.hallo-alexa.workers.dev/agent`), one D1. The agents are
+distinguished by **their secret**, not by their URL. That is why the secret
+handling became a list.
+
+### Answer 2: you did NOT click it — nothing was dispatched
+
+The live tail (`wrangler tail`) shows only the platform's health probes:
+```
+GET  /agent  - Ok @ 5:34:41 PM
+GET  /health - Ok @ 5:34:42 PM
+```
+**No POST to /agent** — so no practice task was ever dispatched, and the
+Practice button was not clicked (or the click did not reach the agent).
+
+**Where the button is** (extracted from the dashboard's own client code):
+the sidebar group **"Your Agents"** contains
+- `/dashboard/agents` — "Roster, health and tasks"
+- **`/dashboard/practice` — "Practice — Test your agents"** ← this one
+- `/dashboard/submissions` — "Your Submissions"
+
+So: **dashboard → left sidebar → "Your Agents" → "Practice"**. It is a page,
+not a button on the agents page. The practice page lists the agents and lets
+you dispatch a task against a chosen one.
+
+### Two MORE multi-agent bugs — found because the agents share one D1
+
+The platform numbers task ids **PER AGENT** (your arena shows `gk_9d1`,
+`gk_9d2`, `gk_9d3`, `gk_9d4`), and two agents can be handed the **same** task
+id and the **same** `proof_tx`. With the old schema:
+
+1. **`answers` was keyed by `task_id` alone** → agent #2 would have been served
+   **agent #1's cached answer**. Silently wrong, every task.
+2. **`proof_refs` was scoped by mode alone** → agent #1's proof reference
+   would look like a **replay** to agent #2 → a wrong REJECT (-3 instead of
+   +12).
+
+Both fixed: every row is now keyed by **`agent_key`**, a short SHA-256 digest
+of the secret that matched (stable across requests, and it reveals nothing
+about the secret). The schema was re-applied to D1 (4 tables) and the Worker
+redeployed. A regression test proves it: **two agents, same task id, same
+proof_tx → agent #2 gets APPROVE / VALID_PROOF**, not a cached answer and not
+a replay. **68 tests, all passing.** Live-verified: preflight 200, gatekeeper
+task 200 in 4.3s.
+
+### Lesson
+
+Sharing one endpoint across several agents is the right call (one repo, one
+deploy, one D1) — but EVERY piece of stored state must be agent-scoped. The
+platform's per-agent task numbering is what makes that mandatory.
+
+---
+
 ## 2026-10-22 — Multi-agent support: one endpoint, several agents, one secret each
 
 **Owner ask:** *"i can register 3 agents should i register the steal agent too? i
