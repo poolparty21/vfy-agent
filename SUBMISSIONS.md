@@ -139,10 +139,21 @@ should an agent check before trusting another agent) + #06 (the agent I built)
 
 ## Publishing checklist
 
-- [ ] Post the thread on X with `#AgentGames` and tag `@ZKVProtocol`
-- [ ] Crosspost the same piece (LinkedIn / Reddit / a dev blog) and **add each
-      link** to the submission — crossposting earns bonus XP
-- [ ] Wildcard: add the repo link **and** the public endpoint as two links
-- [ ] Wildcard: supporting context must mention the problem, who it helps and
-      what it does
-- [ ] Keep the supporting context under 1000 characters
+- [x] Wildcard: a real 32-byte on-chain proof reference, verified three ways
+- [x] Wildcard: supporting context mentions the problem, who it helps and what
+      it does — and is 997 characters (limit 1000)
+- [x] Wildcard: the repo link, the public endpoint **and** the `/proof-reference`
+      endpoint are ready to add as three links
+- [ ] **Owner action:** open Dashboard → Control room → Submissions → New
+      submission → Wildcard, paste the three links + the supporting context
+      above, and enter the proof reference
+      `0x52f943ec94d2adc0ee2554efc8540a52cefedfc6366012f26466f4fb831930ab`
+- [ ] **Owner action:** post the thread on X with `#AgentGames` and tag
+      `@ZKVProtocol`
+- [ ] **Owner action:** crosspost the same piece (LinkedIn / Reddit / a dev
+      blog) and **add each link** to the submission — crossposting earns bonus XP
+- [ ] Creator Track: same form, Category = Creator Track, with the published
+      thread link(s)
+
+> The platform's `/api/submissions` requires an authenticated session, so the
+> form itself must be filled in from the dashboard.
