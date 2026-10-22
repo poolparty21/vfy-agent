@@ -97,6 +97,44 @@ Cloudflare anycast from the picture entirely. ⚠️ The wrangler OAuth token ha
 authentication scheme") — so a custom domain needs either a scoped API token
 or a DNS record created by the account owner.
 
+---
+
+## 2026-10-22 — Secret rotated: the AES-GCM decrypt theory is CONFIRMED
+
+The owner rotated the secret on the dashboard and supplied the new one-time
+value. It was added to `AGENT_GAMES_HMAC_SECRETS` **alongside** the two
+existing ones (a list of three), so nothing that was working broke, and the
+Worker was redeployed.
+
+**Live-verified: all three secrets authenticate against the deployed Worker,
+each response signed with the same secret that signed the request.**
+
+| Agent | Secret | Status |
+|---|---|---|
+| missi | `83937170481235c8f208078e038d03e5c4e442d5c41109d4c1bb3c4388fc2dc6` | ok |
+| jimmygreen | `7284fd1762f68b4e875b7421da7bdc23ff3ccbffb8e5ebe49baff6d2715bb787` | ok |
+| **rotated (new)** | `0cdff85eadd152c1de5373e2ff553f56c078cef9cb7d858eb616334917201e61` | ok — backed up in the workspace store as `AGENT_GAMES_HMAC_SECRET_ROTATED` |
+
+**Why this matters:** the preflight failure was *"Unsupported state or unable
+to authenticate data"* = the platform's own AES-256-GCM blob for that agent
+would not decrypt. Rotating regenerates that blob from scratch, so if the
+corruption was in the platform's stored copy, rotation is exactly the right
+remedy. **If preflight now passes, the theory is confirmed** — and if it still
+fails with the same message, the problem is upstream of the agent record and
+the platform's support is the next step.
+
+**Also corrected in this round:** the commitment the owner entered was in the
+wrong form. The platform expects `C = keccak256(W || R)` (policy witness words
+‖ a private 32-byte salt) and the policy version string `max-extract-v1` — see
+the reference implementation's `scripts/commit.mjs`. The correct values are
+now in `wrangler.toml` and `scripts_commit.mjs` regenerates them.
+
+**Note on hygiene:** the old secrets stay in the list for now so a
+mis-identified agent is not locked out. Once preflight passes on the rotated
+agent, the superseded secrets can be dropped from `AGENT_GAMES_HMAC_SECRETS`.
+
+---
+
 ### 🔴🔴 ROOT CAUSE FOUND: "Unsupported state or unable to authenticate data"
 
 **The error string is from Node's `crypto.createDecipheriv`.** Proven by
