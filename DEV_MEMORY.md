@@ -99,6 +99,56 @@ or a DNS record created by the account owner.
 
 ---
 
+## 2026-10-22 — 🎉 STEAL THE VFY PRACTICE PASSED · missi still needs a rotation
+
+**The Steal the VFY practice turn worked end to end.** From the live tail:
+
+```
+1:38:45  preflight      agentKey 96218151c607b016  taskId d21ed4e0…  ok
+1:39:36  steal-the-vfy  agentKey 96218151c607b016  matchId 776ff75d…  turn 1  action EXTRACT 10
+```
+
+The platform reported: **"Correct decision. Turn 1 resolved against the
+reference opponent (EXTRACT). Balance: 102 VFY."**
+
+So the platform delivered a real VFY turn, our agent answered with
+`EXTRACT {amount:10}` plus `protocolVersion` / `publicInputsHash` /
+`public_signals`, and the platform **accepted the response schema and judged
+the decision correct**. That validates the three schema fixes
+(`protocolVersion`, `public_signals`, correct `publicInputsHash`) and the
+commitment format.
+
+### The rotated secret belongs to **jimmygreen** — missi still needs its own rotation
+
+Dashboard state after the run:
+- `jimmygreen` — Steal the VFY — **Preflight OK · Healthy · 58ms** ✔
+- `missi` — Proof Gatekeeper — **Preflight failed** (same decrypt error) ✘
+
+`agentKey 96218151c607b016` = the rotated secret = **jimmygreen**. **missi's
+secret was never rotated**, and its platform-side AES-256-GCM blob is still
+undecryptable — so **every missi delivery fails before it leaves the
+platform**. missi is the Proof Gatekeeper agent, i.e. the one that scores in
+the 8-round daily competition, so this is the **highest-priority remaining
+item**.
+
+**Fix:** Dashboard → My Agents → missi → **Rotate Secret** → paste the new
+one-time secret here. The endpoint already accepts a list, so it is a one-line
+change and nothing else breaks.
+
+### Creator Track + Wildcard drafts written
+
+`SUBMISSIONS.md` holds ready-to-paste entries for both remaining tracks:
+- **Wildcard** — agent link (the repo) + public endpoint + use case + the
+  zkVerify checkable claim.
+- **Creator Track** — a thread built on content ideas #02 (can an agent back up
+  what it says), #03 (a trust checklist) and #06 (the agent I built), using the
+  three real engineering lessons: the 60s window is really 15s, the 50
+  subrequest cap, and hashing the hex characters instead of the digest bytes.
+  Must include `#AgentGames` and tag `@ZKVProtocol`; crosspost and add every
+  link for bonus XP.
+
+---
+
 ## 2026-10-22 — Preflight PASSES but VFY practice still fails → the ENTER-EVENT step
 
 The rotation worked for preflight. Timeline (UTC):
