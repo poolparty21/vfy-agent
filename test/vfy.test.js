@@ -173,3 +173,38 @@ test("the fallback turn response is schema-valid HOLD", () => {
   assert.equal(res.policyProof.circuitVersion, "v1-draft");
   assert.match(res.idempotencyKey, /^[0-9a-f-]{36}$/);
 });
+
+test("the turn response carries protocolVersion, public signals and the hash", () => {
+  // The platform's response-schema check rejected a response without these.
+  const res = buildTurnResponse({
+    protocolVersion: "v1",
+    matchId: "9f4e1b2a-c53d-4b21-9f8a-1234567890ab",
+    turn: 3,
+    state: { selfBalance: "95", opponentBalance: "105" },
+    strategyCommitment: { hash: "0x" + "11".repeat(32) },
+    resolverVersion: "v1-draft",
+  });
+  assert.equal(res.protocolVersion, "v1");
+  assert.equal(res.matchId, "9f4e1b2a-c53d-4b21-9f8a-1234567890ab");
+  assert.equal(res.turn, 3);
+  assert.equal(res.policyProof.circuitVersion, "v1-draft");
+  assert.match(res.policyProof.publicInputsHash, /^0x[0-9a-f]{64}$/);
+  assert.ok(Array.isArray(res.policyProof.public_signals), "public_signals must be present");
+  assert.equal(res.policyProof.public_signals.length, 8);
+  // The signals must be the same values the hash covers, in the same order.
+  assert.equal(
+    res.policyProof.public_signals[1],
+    BigInt("0x9f4e1b2ac53d4b219f8a1234567890ab").toString(),
+  );
+  assert.equal(res.policyProof.public_signals[3], "95");
+  assert.equal(res.policyProof.public_signals[4], "105");
+  assert.equal(res.policyProof.public_signals[5], "2", "EXTRACT is action code 2");
+});
+
+test("the idempotency key is derived from the real digest bytes", () => {
+  // It used to hash the hex CHARACTERS of the digest instead of its bytes.
+  const key = idempotencyKey("9f4e1b2a-c53d-4b21-9f8a-1234567890ab", 3);
+  assert.match(key, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.equal(key, idempotencyKey("9f4e1b2a-c53d-4b21-9f8a-1234567890ab", 3));
+  assert.notEqual(key, idempotencyKey("9f4e1b2a-c53d-4b21-9f8a-1234567890ab", 4));
+});

@@ -143,6 +143,46 @@ export function publicInputsHash({
 }
 
 /**
+ * The circuit's public signals, in the same order the public-inputs hash uses.
+ *
+ * The build guide's hash is keccak256 over eight ABI-packed 32-byte words in
+ * a fixed order; those eight values ARE the circuit's public inputs, so the
+ * signal array mirrors them exactly. The platform "independently computes
+ * this hash from the game state it knows and rejects any proof where the hashes
+ * diverge", so the two must agree.
+ *
+ * @returns {string[]|null} decimal strings, or null when a value is missing
+ */
+export function buildPublicSignals({
+  commitment,
+  matchId,
+  turn,
+  selfBalance,
+  opponentBalance,
+  action,
+  circuitVersion,
+}) {
+  const versionCode = CIRCUIT_VERSION_CODE[circuitVersion];
+  if (versionCode === undefined) return null;
+  const commitmentWord = commitment === undefined ? undefined : matchIdWord(commitment);
+  if (commitmentWord === undefined) return null;
+  try {
+    return [
+      commitmentWord.toString(),
+      matchIdWord(matchId).toString(),
+      toBig(turn).toString(),
+      toBig(selfBalance).toString(),
+      toBig(opponentBalance).toString(),
+      ACTION_CODE[action.type].toString(),
+      (action.type === "EXTRACT" ? toBig(action.amount) : 0n).toString(),
+      versionCode.toString(),
+    ];
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The 32-byte word for a match id.
  *
  * The build guide specifies `BigInt("0x" + matchId.replace(/-/g, ""))`, which
@@ -172,10 +212,10 @@ function matchIdWord(matchId) {
  * validators accept it.
  */
 export function idempotencyKey(matchId, turn) {
-  const h = Uint8Array.from(
-    keccak256(new TextEncoder().encode(`steal-the-vfy:${matchId}:${turn}`)).slice(2),
-    (c) => c.charCodeAt(0),
-  );
+  // keccak256() returns a hex STRING, so the digest has to be decoded to
+  // bytes first — slicing the string would hash the hex CHARACTERS.
+  const digest = keccak256(new TextEncoder().encode(`steal-the-vfy:${matchId}:${turn}`));
+  const h = Uint8Array.from(digest.slice(2).match(/../g), (b) => parseInt(b, 16));
   h[6] = (h[6] & 0x0f) | 0x40;
   h[8] = (h[8] & 0x3f) | 0x80;
   const s = [...h.slice(0, 16)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -226,9 +266,40 @@ export function buildTurnResponse(env, now = new Date(), registeredCommitment) {
       circuitVersion,
     });
   }
+
+  // The platform's response-schema check requires the policy proof itself:
+  // "attach your policy proof (circuitVersion plus the Groth16 proof and
+  // public_signals)". A Groth16 proof is only producible once the platform
+  // publishes the circuit artifacts (.zkey / .wasm), which it has not yet.
+  //
+  // Until then we still declare the field so the response is schema-shaped,
+  // and we publish the public inputs the circuit would consume. The platform
+  // treats a missing or mismatched required field as HOLD with no proof, so
+  // declaring the shape honestly is strictly better than omitting it.
+  const publicSignals = buildPublicSignals({
+    commitment,
+    matchId: env.matchId,
+    turn: env.turn,
+    selfBalance: env.state?.selfBalance,
+    opponentBalance: env.state?.opponentBalance,
+    action,
+    circuitVersion,
+  });
+  if (publicSignals) policyProof.public_signals = publicSignals;
+
+  // The Groth16 proof itself. It can only be produced once the platform
+  // publishes the circuit artifacts (.zkey / .wasm) — "Circuit artifacts are
+  // being prepared — check back before the first scored round opens" — and it
+  // must be generated with the REGISTERED key. When no prover is available
+  // the field is left out rather than faked: the platform treats a missing
+  // required field as HOLD with no proof, and a fabricated proof would be
+  // worse (an invalid proof, not an absent one).
+  const proof = env.policyProof?.proof ?? env.proof;
+  if (proof) policyProof.proof = proof;
   // The Groth16 proof and public_signals go here once the platform publishes
   // the policy circuit (.wasm / .zkey).
   return {
+    protocolVersion: env.protocolVersion ?? "v1",
     matchId: env.matchId,
     turn: env.turn,
     // amount must be omitted for HOLD/FORTIFY, not sent as 0
