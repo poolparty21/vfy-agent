@@ -1,0 +1,17 @@
+{
+  "name": "vfy-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "zkVerify Agent Games 2026 — Proof Gatekeeper agent (Cloudflare Worker)",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "d1:create": "wrangler d1 create vfy-agent",
+    "d1:apply": "wrangler d1 execute vfy-agent --remote --file=schema.sql"
+  }
+}
