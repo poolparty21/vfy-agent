@@ -30,7 +30,7 @@ import {
   saveVfyTurn,
 } from "./store.js";
 import { verifyViaKurier, findTransaction } from "./zkverify.js";
-import { buildTurnResponse, isVfyTurn } from "./vfy.js";
+import { buildTurnResponse, fallbackTurnResponse, isVfyTurn } from "./vfy.js";
 
 const enc = new TextEncoder();
 
@@ -248,7 +248,16 @@ async function handleVfyTurn(env, task, sign) {
     return send(env, 200, JSON.parse(cached), sign);
   }
 
-  const response = buildTurnResponse(task, new Date(), env.STRATEGY_COMMITMENT);
+  // Building the response must never be able to lose the turn: a missing or
+  // invalid response is scored as a HOLD with a reliability penalty, but a
+  // thrown error is a delivery timeout — strictly worse.
+  let response;
+  try {
+    response = buildTurnResponse(task, new Date(), env.STRATEGY_COMMITMENT);
+  } catch (err) {
+    console.error("vfy response build failed:", err?.message);
+    response = fallbackTurnResponse(task);
+  }
   await saveVfyTurn(db, {
     agentKey,
     matchId,
@@ -319,10 +328,13 @@ export default {
         return send(env, 200, { ok: true, protocolVersion: "v1" }, { keyForm, prefix, secret, agentKey });
       }
       if (task.type === "agent-games.proof-gatekeeper.v1") {
-        return handleGatekeeper(env, task, { keyForm, prefix, secret, agentKey });
+        // AWAITED on purpose: returning the promise from inside a `try` does
+        // NOT catch its rejection, so an async error would escape as a 500 —
+        // and a 500 is recorded as a delivery timeout, not as a wrong answer.
+        return await handleGatekeeper(env, task, { keyForm, prefix, secret, agentKey });
       }
       if (isVfyTurn(task)) {
-        return handleVfyTurn(env, task, { keyForm, prefix, secret, agentKey });
+        return await handleVfyTurn(env, task, { keyForm, prefix, secret, agentKey });
       }
       console.warn("unknown task type", task.type, JSON.stringify(Object.keys(task)));
       return send(env, 400, { error: "unsupported task type" }, { keyForm, prefix, secret, agentKey });

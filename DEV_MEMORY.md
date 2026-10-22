@@ -4,6 +4,65 @@
 
 ---
 
+## 2026-10-22 — Second agent "jimmygreen" (Steal the VFY) · 2 more real bugs fixed
+
+**Owner update:** *"jimmygreen 7284fd17…787 for steal task"*
+
+### The second agent is live
+
+`jimmygreen`'s secret was added to the comma-separated
+`AGENT_GAMES_HMAC_SECRETS` list (both secrets) and the Worker redeployed.
+**Same repo, same endpoint, one deploy** — the agents are told apart by their
+secret, and each response is signed with the secret that signed the request.
+
+Live-verified with BOTH secrets:
+- `jimmygreen` → 200, response signed with **its own** secret ✔
+- `missi` → 200, response signed with **its own** secret ✔ (no regression)
+- an unknown secret → 401 ✔
+
+The new secret is also backed up in `C:\mnt\www\.env.local` as
+`AGENT_GAMES_HMAC_SECRET_JIMMYGREEN`.
+
+### 🔴 Two more real bugs, found by sending a real VFY turn
+
+Sending an actual `steal-the-vfy` turn envelope to jimmygreen produced
+**`error code: 1101`** — a Worker exception, i.e. a 500, i.e. a **delivery
+timeout** on a scored turn. Two independent causes:
+
+1. **Async errors escaped the try/catch.** The handler did
+   `return handleVfyTurn(...)` — returning a *promise* from inside a `try`
+   does **not** catch its rejection, so any async error became a 500 instead
+   of a well-formed answer. Fixed with `return await …` for BOTH handlers.
+   This was a latent landmine for the gatekeeper too.
+2. **A non-hex `matchId` threw.** The build guide specifies
+   `BigInt("0x" + matchId.replace(/-/g, ""))`, which assumes a HEX match id
+   (the sample is `9f4e1b2a-…`). Any other id (a UUID, an opaque string)
+   threw `not an integer: 0xtestmatch01`. Fixed: hex ids follow the guide
+   exactly; anything else falls back to a stable keccak-256 of the id's
+   bytes, so a malformed id can never lose a turn.
+
+Plus a **safety net**: if the response cannot be built at all, the agent now
+returns a schema-valid **HOLD** instead of throwing. The rules say *"Missing
+or invalid responses substitute HOLD with a reliability penalty"* — a HOLD
+forfeits the turn's points, while a timeout also forfeits the turn AND
+counts as an outage.
+
+**Live-verified after deploying:** a VFY turn with a hex matchId → 200 with
+`EXTRACT {amount:10}` and a `publicInputsHash`; the same with a non-hex
+matchId → 200. **74/74 tests pass** (new: hex-matchId conversion, non-hex
+matchId, determinism, fallback HOLD).
+
+### Still blocked for Steal the VFY (unchanged)
+
+The Circom `.zkey`/`.wasm` are **not published** ("check back before the first
+scored round opens"), and the platform selects the circuit and VK itself. So
+the per-turn Groth16 policy proof still cannot be generated, and a **strategy
+commitment** must be registered on the dashboard (Dashboard → My Agents →
+Edit agent → the Steal the VFY section) before Swiss Round 1 — its hash goes
+into `STRATEGY_COMMITMENT` in `wrangler.toml`.
+
+---
+
 ## 2026-10-22 — FIRST PRACTICE RUN: "Correct decision" · the real window is 15s, not 60s
 
 **Status:** the owner dispatched a practice task against **missi**. The

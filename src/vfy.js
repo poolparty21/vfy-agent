@@ -129,7 +129,7 @@ export function publicInputsHash({
   if (versionCode === undefined) throw new Error(`unknown circuit version ${circuitVersion}`);
   const fields = [
     commitment,
-    "0x" + String(matchId).replace(/-/g, ""),
+    matchIdWord(matchId),
     turn,
     selfBalance,
     opponentBalance,
@@ -140,6 +140,30 @@ export function publicInputsHash({
   const buf = new Uint8Array(fields.length * 32);
   fields.forEach((w, i) => buf.set(w, i * 32));
   return keccak256(buf);
+}
+
+/**
+ * The 32-byte word for a match id.
+ *
+ * The build guide specifies `BigInt("0x" + matchId.replace(/-/g, ""))`, which
+ * assumes a HEX match id (the sample is "9f4e1b2a-..."). A match id that is
+ * not hex — a UUID, or any opaque string — would make that conversion throw
+ * and take the whole turn down with it.
+ *
+ * So: hex ids follow the guide exactly, and anything else falls back to a
+ * stable keccak-256 of the id's bytes. The fallback can never differ from the
+ * platform for a hex id (the case the platform actually produces), and it
+ * keeps a malformed id from becoming a lost turn.
+ */
+function matchIdWord(matchId) {
+  const raw = String(matchId ?? "");
+  const hex = raw.replace(/^0x/i, "").replace(/-/g, "");
+  if (hex.length > 0 && /^[0-9a-fA-F]+$/.test(hex) && hex.length % 2 === 0) {
+    return BigInt("0x" + hex);
+  }
+  // Not hex: use the digest of the raw bytes, big-endian.
+  const digest = keccak256(new TextEncoder().encode(raw));
+  return BigInt(digest);
 }
 
 /**
@@ -218,3 +242,22 @@ export function buildTurnResponse(env, now = new Date(), registeredCommitment) {
 /** A turn envelope for the Steal the VFY event. */
 export const isVfyTurn = (body) =>
   Boolean(body && body.eventId === "steal-the-vfy" && body.matchId !== undefined && body.turn !== undefined);
+
+/**
+ * A minimal, schema-valid HOLD response.
+ *
+ * Used when the real response cannot be built. A missing or invalid response
+ * is scored as a HOLD with a reliability penalty, whereas a thrown error is a
+ * delivery timeout — strictly worse. HOLD is the safe fallback: it forfeits
+ * the turn's points but keeps the connection alive.
+ */
+export function fallbackTurnResponse(env, now = new Date()) {
+  return {
+    matchId: env?.matchId,
+    turn: env?.turn,
+    action: { type: "HOLD" },
+    policyProof: { circuitVersion: "v1-draft" },
+    agentTimestamp: now.toISOString(),
+    idempotencyKey: idempotencyKey(env?.matchId ?? "", env?.turn ?? 0),
+  };
+}

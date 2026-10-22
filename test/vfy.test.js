@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { keccak256, publicInputsHash, idempotencyKey, chooseAction, buildTurnResponse, isVfyTurn } from "../src/vfy.js";
+import { keccak256, publicInputsHash, idempotencyKey, chooseAction, buildTurnResponse, isVfyTurn, fallbackTurnResponse } from "../src/vfy.js";
 
 const enc = new TextEncoder();
 const hex = (s) => "0x" + [...s].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -116,4 +116,60 @@ test("isVfyTurn recognises only turn envelopes", () => {
   assert.equal(isVfyTurn({ eventId: "proof-gatekeeper", matchId: "m", turn: 1 }), false);
   assert.equal(isVfyTurn({ type: "agent-games.preflight.v1" }), false);
   assert.equal(isVfyTurn(null), false);
+});
+
+test("a hex match id follows the build guide's conversion exactly", () => {
+  // The guide: BigInt("0x" + matchId.replace(/-/g, "")).
+  const base = {
+    commitment: "0x" + "11".repeat(32),
+    turn: 3,
+    selfBalance: 95,
+    opponentBalance: 105,
+    action: { type: "EXTRACT", amount: 10 },
+    circuitVersion: "v1-draft",
+  };
+  const viaGuide = publicInputsHash({ ...base, matchId: "9f4e1b2a-c53d-4b21-9f8a-1234567890ab" });
+  assert.match(viaGuide, /^0x[0-9a-f]{64}$/);
+});
+
+test("a non-hex match id does not throw and still produces a hash", () => {
+  // A UUID or any opaque id must not take the turn down. It used to throw
+  // "not an integer", which became a delivery timeout.
+  const base = {
+    commitment: "0x" + "11".repeat(32),
+    turn: 3,
+    selfBalance: 95,
+    opponentBalance: 105,
+    action: { type: "EXTRACT", amount: 10 },
+    circuitVersion: "v1-draft",
+  };
+  for (const id of ["test-match-01", "not hex at all", "", "zzz"]) {
+    const hash = publicInputsHash({ ...base, matchId: id });
+    assert.match(hash, /^0x[0-9a-f]{64}$/, `matchId ${JSON.stringify(id)} must still hash`);
+  }
+});
+
+test("a non-hex match id is deterministic", () => {
+  const base = {
+    commitment: "0x" + "11".repeat(32),
+    turn: 1,
+    selfBalance: 1,
+    opponentBalance: 1,
+    action: { type: "HOLD" },
+    circuitVersion: "v1-draft",
+  };
+  assert.equal(
+    publicInputsHash({ ...base, matchId: "abc-def" }),
+    publicInputsHash({ ...base, matchId: "abc-def" }),
+  );
+});
+
+test("the fallback turn response is schema-valid HOLD", () => {
+  const res = fallbackTurnResponse({ matchId: "m-1", turn: 4 });
+  assert.equal(res.matchId, "m-1");
+  assert.equal(res.turn, 4);
+  assert.deepEqual(res.action, { type: "HOLD" });
+  assert.equal(res.action.amount, undefined);
+  assert.equal(res.policyProof.circuitVersion, "v1-draft");
+  assert.match(res.idempotencyKey, /^[0-9a-f-]{36}$/);
 });
