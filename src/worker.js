@@ -285,6 +285,33 @@ export default {
 
     const agentPath = env.AGENT_PATH ?? "/agent";
 
+    // Log every inbound request, including ones that are rejected before a
+    // handler runs. A platform safety check that never reaches us is invisible
+    // otherwise, and that is exactly the failure we are chasing.
+    console.log(
+      JSON.stringify({
+        event: "request",
+        method: request.method,
+        path: url.pathname,
+        ua: (request.headers.get("user-agent") ?? "").slice(0, 60),
+      }),
+    );
+
+    // Some endpoint safety checkers probe a well-known path to confirm the
+    // host serves a real application. Answer it with the same JSON as the
+    // health check so a probe can never read as an unreachable host.
+    if (url.pathname === "/.well-known/agent-games.json" || url.pathname === "/.well-known/agent.json") {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          agent: "vfy-agent",
+          protocolVersion: "v1",
+          endpoint: agentPath,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
     // The platform's safety/reachability check may probe the REGISTERED
     // endpoint with GET, HEAD or OPTIONS before it ever delivers a task. A
     // 404 on that path reads as an unreachable or unsafe endpoint, so every

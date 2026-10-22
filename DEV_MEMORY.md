@@ -53,6 +53,50 @@ naive "is the IP private?" check passes, but a checker that dislikes
 fails, the fallback is a **custom domain** on a route we control. The account
 has no zones of its own for that, so it would need a domain we own.
 
+### 🔴 The VFY safety check rejected the endpoint BEFORE delivering
+
+Two practice dispatches (13:33:42Z, 13:33:56Z) failed with
+`FAILED (unsafe_endpoint)` / *"The endpoint was rejected by the safety checks.
+Use a public HTTPS URL — private, loopback, and non-HTTPS addresses are
+blocked."*
+
+**No request reached us.** D1 has no `vfy_turns` row for either match id
+(`44c7b0a9-…`, `0dbd6b31-…`), so this is a **pre-delivery check on the
+endpoint**, not a task we answered wrongly. (Caveat: the `wrangler tail`
+session happened to expire within 11s of the first failure, so the tail alone
+is not proof — the D1 rows are.)
+
+The endpoint is objectively fine by the stated criteria — checked explicitly:
+- scheme `https` ✔, public DNS (not loopback/private) ✔
+- resolves to **104.21.15.193 / 172.67.163.204** and **2606:4700:3031::6815:fc1**
+  — public anycast, confirmed from 8.8.8.8 and 1.1.1.1 alike ✔
+- TLS chain valid: `subject=CN=hallo-alexa.workers.dev`, `Verify return code: 0` ✔
+- answers 200 for browser, curl and node-fetch user agents alike ✔
+
+So the hint text is generic boilerplate and the *real* trigger is something the
+check probes. **Two real gaps found and fixed:**
+
+1. **`HEAD /agent` returned 404** (only GET and POST were routed). A
+   reachability probe that uses HEAD would see 404 and read the endpoint as
+   unsafe. Now `GET`/`HEAD` on `/agent` answer 200 and `OPTIONS` answers 204
+   with CORS headers.
+2. **No well-known path.** Checkers often probe one. `/.well-known/agent-games.json`
+   (and `/.well-known/agent.json`) now answer 200 with the same JSON.
+
+**Plus a diagnostic improvement:** the Worker now logs **every** inbound request
+(method, path, user-agent) before any handler runs, so a safety-check probe is
+visible in the tail even if it is rejected before reaching a handler. That is
+the only way to see a check that never delivers a task.
+
+**If it still fails, the next lever is a custom domain.** The account owns
+`chatlink.tv`, `condobase.asia` and `flightproof.co`, so a route like
+`agent-games.condobase.asia` is possible — that removes `*.workers.dev` and
+Cloudflare anycast from the picture entirely. ⚠️ The wrangler OAuth token has
+`workers_routes:write` + `zone:read` but **not** DNS edit, and the
+`workers/domains` API rejects an OAuth token ("Method not allowed for this
+authentication scheme") — so a custom domain needs either a scoped API token
+or a DNS record created by the account owner.
+
 ---
 
 ## 2026-10-22 — VFY practice turn FAILED schema check · 3 more bugs fixed
