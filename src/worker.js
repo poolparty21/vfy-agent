@@ -134,7 +134,8 @@ async function handleGatekeeper(env, task, sign) {
   const mode = task.mode === "competition" ? "competition" : "practice";
 
   // Idempotency: a retried task must get the identical answer.
-  const cached = await getAnswer(db, taskId);
+  const agentKey = sign.agentKey || "default";
+  const cached = await getAnswer(db, agentKey, taskId);
   if (cached) {
     console.log(JSON.stringify({ event: "proof-gatekeeper", taskId, mode, replay: "cached" }));
     return send(env, 200, JSON.parse(cached), sign);
@@ -153,7 +154,7 @@ async function handleGatekeeper(env, task, sign) {
 
   // Replay check: claim the reference atomically. The owner of the reference
   // is the task that used it first; anyone else is a replay.
-  const isFirstUse = await claimProofRef(db, mode, proofTx, taskId);
+  const isFirstUse = await claimProofRef(db, agentKey, mode, proofTx, taskId);
   const isReplay = proofTx ? !isFirstUse : false;
 
   // The platform allows 60 seconds. Reserve a safety margin and give the
@@ -194,7 +195,7 @@ async function handleGatekeeper(env, task, sign) {
     ...(publicSignals ? { public_signals: publicSignals } : {}),
   };
 
-  await saveAnswer(db, taskId, mode, JSON.stringify(response));
+  await saveAnswer(db, agentKey, taskId, mode, JSON.stringify(response));
   console.log(
     JSON.stringify({
       event: "proof-gatekeeper",
@@ -216,7 +217,8 @@ async function handleVfyTurn(env, task, sign) {
   const matchId = String(task.matchId ?? "");
   const turn = Number(task.turn ?? 0);
 
-  const cached = await getVfyTurn(db, matchId, turn);
+  const agentKey = sign.agentKey || "default";
+  const cached = await getVfyTurn(db, agentKey, matchId, turn);
   if (cached) {
     console.log(JSON.stringify({ event: "steal-the-vfy", matchId, turn, replay: "cached" }));
     return send(env, 200, JSON.parse(cached), sign);
@@ -224,6 +226,7 @@ async function handleVfyTurn(env, task, sign) {
 
   const response = buildTurnResponse(task, new Date(), env.STRATEGY_COMMITMENT);
   await saveVfyTurn(db, {
+    agentKey,
     matchId,
     turn,
     mode: String(task.mode ?? ""),
@@ -270,7 +273,7 @@ export default {
     // Verify the signature against the RAW body, before parsing anything.
     const raw = new Uint8Array(await request.arrayBuffer());
     const header = request.headers.get(SECRET_HEADER) ?? "";
-    const { ok, keyForm, prefix, secret } = await verifySignatureAny(secrets, raw, header);
+    const { ok, keyForm, prefix, secret, agentKey } = await verifySignatureAny(secrets, raw, header);
     if (!ok) {
       // Lengths only, never values: enough to spot a bad paste vs a scheme
       // mismatch without echoing anything secret.
@@ -284,21 +287,21 @@ export default {
     try {
       task = JSON.parse(new TextDecoder().decode(raw));
     } catch {
-      return send(env, 400, { error: "invalid json" }, { keyForm, prefix, secret });
+      return send(env, 400, { error: "invalid json" }, { keyForm, prefix, secret, agentKey });
     }
 
     try {
       if (task.type === "agent-games.preflight.v1") {
-        return send(env, 200, { ok: true, protocolVersion: "v1" }, { keyForm, prefix, secret });
+        return send(env, 200, { ok: true, protocolVersion: "v1" }, { keyForm, prefix, secret, agentKey });
       }
       if (task.type === "agent-games.proof-gatekeeper.v1") {
-        return handleGatekeeper(env, task, { keyForm, prefix, secret });
+        return handleGatekeeper(env, task, { keyForm, prefix, secret, agentKey });
       }
       if (isVfyTurn(task)) {
-        return handleVfyTurn(env, task, { keyForm, prefix, secret });
+        return handleVfyTurn(env, task, { keyForm, prefix, secret, agentKey });
       }
       console.warn("unknown task type", task.type, JSON.stringify(Object.keys(task)));
-      return send(env, 400, { error: "unsupported task type" }, { keyForm, prefix, secret });
+      return send(env, 400, { error: "unsupported task type" }, { keyForm, prefix, secret, agentKey });
     } catch (err) {
       console.error("handler error:", err?.message);
       // Fail closed with a well-formed answer rather than a 5xx.
@@ -306,7 +309,7 @@ export default {
         env,
         200,
         { decision: "REJECT", reason_code: REASON.PROOF_INVALID },
-        { keyForm, prefix, secret },
+        { keyForm, prefix, secret, agentKey },
       );
     }
   },

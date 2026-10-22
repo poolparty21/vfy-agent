@@ -92,27 +92,55 @@ export async function verifySignature(secret, rawBody, headerValue) {
 }
 
 /**
+ * A stable, non-secret identifier for the agent that owns a secret.
+ *
+ * Several agents can share one endpoint, and the platform numbers task ids
+ * PER AGENT (gk_9d1, gk_9d2, ...). Every stored row is therefore scoped by
+ * this key, so agent #2 is never served agent #1's cached answer and never
+ * sees agent #1's proof references as replays.
+ *
+ * It is a short digest of the secret: stable across requests, and it reveals
+ * nothing about the secret itself.
+ */
+export async function agentKeyFor(secret) {
+  const digest = await crypto.subtle.digest("SHA-256", enc.encode(String(secret ?? "")));
+  return [...new Uint8Array(digest)]
+    .slice(0, 8)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
  * Verify a request signature against ANY of the accepted secrets.
  *
  * @param {string[]} secrets  the accepted secrets
  * @param {Uint8Array} rawBody  the raw request body
  * @param {string} headerValue  the `x-agent-games-signature` header
- * @returns {Promise<{ok: boolean, keyForm: string, prefix: string, secret: string}>}
+ * @returns {Promise<{ok: boolean, keyForm: string, prefix: string, secret: string, agentKey: string}>}
  *   `keyForm`/`prefix` describe the form that verified, so responses can
- *   mirror it; `secret` is the secret that matched (for multi-agent setups).
+ *   mirror it; `secret` is the secret that matched and `agentKey` identifies
+ *   the agent that owns it.
  */
 export async function verifySignatureAny(secrets, rawBody, headerValue) {
   const { prefix, digest } = parseSignature(headerValue);
-  if (!digest) return { ok: false, keyForm: "text", prefix, secret: "" };
+  if (!digest) {
+    return { ok: false, keyForm: "text", prefix, secret: "", agentKey: "" };
+  }
   for (const secret of secrets) {
     for (const { form, key } of keyForms(secret)) {
       const expected = await hmacHex(key, rawBody);
       if (safeEqual(expected, digest)) {
-        return { ok: true, keyForm: form, prefix, secret };
+        return {
+          ok: true,
+          keyForm: form,
+          prefix,
+          secret,
+          agentKey: await agentKeyFor(secret),
+        };
       }
     }
   }
-  return { ok: false, keyForm: "text", prefix, secret: "" };
+  return { ok: false, keyForm: "text", prefix, secret: "", agentKey: "" };
 }
 
 /** Produce a response signature header, mirroring the form used by the platform. */

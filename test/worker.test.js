@@ -40,15 +40,19 @@ function fakeDb() {
           return {
             async run() {
               if (s.startsWith("INSERT OR IGNORE INTO answers")) {
-                if (!answers.has(args[0])) answers.set(args[0], { response: args[2] });
-              } else if (s.startsWith("INSERT OR IGNORE INTO proof_refs")) {
+                // (agent_key, task_id, mode, response, answered_at)
                 const key = `${args[0]}|${args[1]}`;
-                if (!proofRefs.has(key)) proofRefs.set(key, { task_id: args[2] });
+                if (!answers.has(key)) answers.set(key, { response: args[3] });
+              } else if (s.startsWith("INSERT OR IGNORE INTO proof_refs")) {
+                // (agent_key, scope, proof_tx, task_id, seen_at)
+                const key = `${args[0]}|${args[1]}|${args[2]}`;
+                if (!proofRefs.has(key)) proofRefs.set(key, { task_id: args[3] });
               } else if (s.startsWith("INSERT OR IGNORE INTO known_vks")) {
                 knownVks.set(args[0], { first_seen: args[1] });
               } else if (s.startsWith("INSERT OR IGNORE INTO vfy_turns")) {
-                const key = `${args[0]}|${args[1]}`;
-                if (!vfyTurns.has(key)) vfyTurns.set(key, { response: args[4] });
+                // (agent_key, match_id, turn, mode, request, response, answered_at)
+                const key = `${args[0]}|${args[1]}|${args[2]}`;
+                if (!vfyTurns.has(key)) vfyTurns.set(key, { response: args[5] });
               }
               return { success: true };
             },
@@ -57,11 +61,12 @@ function fakeDb() {
             },
             async first(column) {
               let row = null;
-              if (s.startsWith("SELECT response FROM answers")) row = answers.get(args[0]) ?? null;
-              else if (s.startsWith("SELECT task_id FROM proof_refs")) {
-                row = proofRefs.get(`${args[0]}|${args[1]}`) ?? null;
+              if (s.startsWith("SELECT response FROM answers")) {
+                row = answers.get(`${args[0]}|${args[1]}`) ?? null;
+              } else if (s.startsWith("SELECT task_id FROM proof_refs")) {
+                row = proofRefs.get(`${args[0]}|${args[1]}|${args[2]}`) ?? null;
               } else if (s.startsWith("SELECT response FROM vfy_turns")) {
-                row = vfyTurns.get(`${args[0]}|${args[1]}`) ?? null;
+                row = vfyTurns.get(`${args[0]}|${args[1]}|${args[2]}`) ?? null;
               }
               if (!row) return null;
               return column ? { [column]: row[column] } : row;
@@ -322,6 +327,43 @@ test("a secret that is not on the list is rejected", async () => {
     e,
   );
   assert.equal(res.status, 401);
+});
+
+test("two agents sharing an endpoint stay isolated", async () => {
+  // The platform numbers task ids PER AGENT (gk_9d1, gk_9d2, ...), and both
+  // agents may be handed the SAME proof_tx. Without an agent dimension in the
+  // stored rows, agent #2 would be served agent #1's cached answer and would
+  // see agent #1's proof reference as a replay.
+  const OTHER = "d".repeat(64);
+  const e = { ...env(), AGENT_GAMES_HMAC_SECRETS: `${SECRET},${OTHER}` };
+  const task = gatekeeperTask({}, { task_id: "gk_9d1" });
+  const raw = enc.encode(JSON.stringify(task));
+
+  // Agent #1 approves a valid condition with this proof_tx.
+  const first = await worker.fetch(
+    new Request("https://example.test/agent", {
+      method: "POST",
+      headers: { [SECRET_HEADER]: await hmacHex(enc.encode(SECRET), raw) },
+      body: raw,
+    }),
+    e,
+  );
+  assert.equal((await first.json()).decision, "APPROVE");
+
+  // Agent #2 gets the SAME task id and the SAME proof_tx. It must be judged
+  // on its own merits: approved, NOT a replay and NOT a cached answer.
+  const second = await worker.fetch(
+    new Request("https://example.test/agent", {
+      method: "POST",
+      headers: { [SECRET_HEADER]: await hmacHex(enc.encode(OTHER), raw) },
+      body: raw,
+    }),
+    e,
+  );
+  const body = await second.json();
+  assert.equal(body.decision, "APPROVE", "agent #2 must not inherit agent #1's verdict");
+  assert.equal(body.reason_code, "VALID_PROOF");
+  assert.notEqual(body.reason_code, "PROOF_REPLAY");
 });
 
 test("invalid JSON is a 400", async () => {

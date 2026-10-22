@@ -3,6 +3,12 @@
 // D1 gives strong consistency, which the replay check needs: two concurrent
 // tasks carrying the same proof_tx must not both be answered as "first use".
 // KV is eventually consistent and would let a replay through.
+//
+// EVERY query is scoped by `agentKey`. Several agents can share one endpoint
+// (one Worker, one D1) and the platform numbers task ids per agent
+// (gk_9d1, gk_9d2, ...). Without the agent dimension, agent #2 would be
+// served agent #1's cached answer, and agent #1's proof references would look
+// like replays to agent #2 — a wrong answer on every task.
 
 /**
  * Claim a proof reference.
@@ -13,32 +19,35 @@
  *
  * @returns {Promise<boolean>} true when this task is the first user
  */
-export async function claimProofRef(db, scope, proofTx, taskId, now = new Date()) {
+export async function claimProofRef(db, agentKey, scope, proofTx, taskId, now = new Date()) {
   if (!db || !proofTx) return true;
   await db
-    .prepare("INSERT OR IGNORE INTO proof_refs (scope, proof_tx, task_id, seen_at) VALUES (?, ?, ?, ?)")
-    .bind(scope, proofTx, taskId, now.toISOString())
+    .prepare("INSERT OR IGNORE INTO proof_refs (agent_key, scope, proof_tx, task_id, seen_at) VALUES (?, ?, ?, ?, ?)")
+    .bind(agentKey, scope, proofTx, taskId, now.toISOString())
     .run();
   const row = await db
-    .prepare("SELECT task_id FROM proof_refs WHERE scope = ? AND proof_tx = ?")
-    .bind(scope, proofTx)
+    .prepare("SELECT task_id FROM proof_refs WHERE agent_key = ? AND scope = ? AND proof_tx = ?")
+    .bind(agentKey, scope, proofTx)
     .first();
   return !row || row.task_id === taskId;
 }
 
 /** Read a previously stored answer for a task (idempotent retries). */
-export async function getAnswer(db, taskId) {
+export async function getAnswer(db, agentKey, taskId) {
   if (!db || !taskId) return null;
-  const row = await db.prepare("SELECT response FROM answers WHERE task_id = ?").bind(taskId).first();
+  const row = await db
+    .prepare("SELECT response FROM answers WHERE agent_key = ? AND task_id = ?")
+    .bind(agentKey, taskId)
+    .first();
   return row?.response ?? null;
 }
 
 /** Store the answer body for a task. */
-export async function saveAnswer(db, taskId, mode, response, now = new Date()) {
+export async function saveAnswer(db, agentKey, taskId, mode, response, now = new Date()) {
   if (!db || !taskId) return;
   await db
-    .prepare("INSERT OR IGNORE INTO answers (task_id, mode, response, answered_at) VALUES (?, ?, ?, ?)")
-    .bind(taskId, mode, response, now.toISOString())
+    .prepare("INSERT OR IGNORE INTO answers (agent_key, task_id, mode, response, answered_at) VALUES (?, ?, ?, ?, ?)")
+    .bind(agentKey, taskId, mode, response, now.toISOString())
     .run();
 }
 
@@ -59,22 +68,22 @@ export async function listKnownVks(db) {
 }
 
 /** Store a Steal the VFY turn and read back a previous answer for it. */
-export async function getVfyTurn(db, matchId, turn) {
+export async function getVfyTurn(db, agentKey, matchId, turn) {
   if (!db) return null;
   const row = await db
-    .prepare("SELECT response FROM vfy_turns WHERE match_id = ? AND turn = ?")
-    .bind(matchId, turn)
+    .prepare("SELECT response FROM vfy_turns WHERE agent_key = ? AND match_id = ? AND turn = ?")
+    .bind(agentKey, matchId, turn)
     .first();
   return row?.response ?? null;
 }
 
 /** Record a Steal the VFY turn with its full request envelope. */
-export async function saveVfyTurn(db, { matchId, turn, mode, request, response }, now = new Date()) {
+export async function saveVfyTurn(db, { agentKey, matchId, turn, mode, request, response }, now = new Date()) {
   if (!db) return;
   await db
     .prepare(
-      "INSERT OR IGNORE INTO vfy_turns (match_id, turn, mode, request, response, answered_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO vfy_turns (agent_key, match_id, turn, mode, request, response, answered_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(matchId, turn, mode, request, response, now.toISOString())
+    .bind(agentKey, matchId, turn, mode, request, response, now.toISOString())
     .run();
 }
