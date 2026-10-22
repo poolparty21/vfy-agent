@@ -4,6 +4,69 @@
 
 ---
 
+## 2026-10-22 — VFY practice turn FAILED schema check · 3 more bugs fixed
+
+**Owner update:** *"Practice Mode … Category: Steal the VFY — Fortify … **Practice delivery failed. Agent response was not valid signed VFY protocol JSON.** … and what i tyoe into commitment hash and circuit and policy version"*
+
+### What the failure was
+
+The live tail caught the real turn:
+```
+POST /agent - Ok @ 6:21:09 PM
+  {"event":"steal-the-vfy","matchId":"9a1beff8-a591-47b5-96d4-73a0676e4548","turn":1,"action":{"type":"EXTRACT","amount":10}}
+```
+We returned 200 and a well-formed body, and the platform still rejected it as
+**"not valid signed VFY protocol JSON"**. The practice turn IS the platform's
+**response-schema check** ("The platform runs a reachability check,
+response-schema check, and a practice turn before entry is confirmed"), so this
+is the schema gate — it must pass before jimmygreen can be entered.
+
+### Three more real bugs
+
+1. **`policyProof` was missing the proof and the public signals.** The guide:
+   *"attach your policy proof (circuitVersion plus the Groth16 proof and
+   public_signals)"*. We sent only `circuitVersion` (+ `publicInputsHash`).
+   Now `policyProof` carries `circuitVersion`, `publicInputsHash`,
+   **`public_signals`** (the 8 public inputs, in the same order the hash
+   covers) and `proof` when a prover is available.
+2. **The response was missing `protocolVersion`.** The request envelope
+   carries `"protocolVersion": "v1"`; the response did not. Now echoed.
+3. **The idempotency key was derived from the wrong bytes.** `keccak256()`
+   returns a hex STRING, so `.slice(2)` gave hex CHARACTERS and `charCodeAt`
+   turned those into ASCII codes instead of using the digest bytes. The key
+   was still a valid-looking UUID, so it passed the eye but was not the
+   documented derivation. Now the digest is decoded to bytes first.
+
+Live-verified after deploying: the VFY response now carries
+`protocolVersion`, `circuitVersion`, `publicInputsHash`, an 8-element
+`public_signals`, and a correct `idempotencyKey`. **76/76 tests pass.**
+
+**A stale cache can mask a fix** — the first re-test returned the OLD cached
+response (the D1 answer cache is keyed by match+turn). Cleared it and retested.
+
+### Still blocked, and the honest answer on the commitment
+
+The Circom `.zkey`/`.wasm` are **not published** ("Circuit artifacts are being
+prepared — check back before the first scored round opens"), and the platform
+**selects the circuit and VK itself** ("entrants cannot supply their own").
+So a genuine Groth16 policy proof cannot be produced yet, and the commitment
+cannot be computed from a circuit we do not have.
+
+**What to type into the dashboard (Dashboard → My Agents → Edit agent → the
+Steal the VFY section):**
+
+| Field | Value | Why |
+|---|---|---|
+| **Commitment hash** | leave it empty for now, or paste the placeholder below | it is `Hash(W, R)` over your private strategy witness and salt, computed BY the circuit. Without the circuit there is no correct value. The rules allow updating it: *"You may redeploy and update your strategy commitment before each new round."* |
+| **Circuit version** | `v1-draft` | the resolver version the platform sends in the turn envelope (`resolverVersion`), and the value the hash encodes as `1` |
+| **Policy version** | `1` | our policy is `max-extract` version `1` (see `POLICY` in `src/vfy.js`) — this is the version string the platform pairs with the commitment |
+
+So the commitment can be registered **after** the artifacts land, and the
+platform explicitly lets us update it between rounds. The blocking dependency
+is the circuit, not the dashboard.
+
+---
+
 ## 2026-10-22 — Second agent "jimmygreen" (Steal the VFY) · 2 more real bugs fixed
 
 **Owner update:** *"jimmygreen 7284fd17…787 for steal task"*
