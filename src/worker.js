@@ -223,6 +223,7 @@ async function handleGatekeeper(env, task, sign) {
   console.log(
     JSON.stringify({
       event: "proof-gatekeeper",
+      agentKey,
       taskId,
       mode,
       decision: response.decision,
@@ -266,7 +267,9 @@ async function handleVfyTurn(env, task, sign) {
     request: JSON.stringify(task),
     response: JSON.stringify(response),
   });
-  console.log(JSON.stringify({ event: "steal-the-vfy", matchId, turn, action: response.action }));
+  console.log(
+    JSON.stringify({ event: "steal-the-vfy", agentKey, matchId, turn, action: response.action }),
+  );
   return send(env, 200, response, sign);
 }
 
@@ -362,6 +365,14 @@ export default {
 
     try {
       if (task.type === "agent-games.preflight.v1") {
+        console.log(
+          JSON.stringify({
+            event: "preflight",
+            agentKey,
+            taskId: task.agent_id ?? task.task_id ?? null,
+            ok: true,
+          }),
+        );
         return send(env, 200, { ok: true, protocolVersion: "v1" }, { keyForm, prefix, secret, agentKey });
       }
       if (task.type === "agent-games.proof-gatekeeper.v1") {

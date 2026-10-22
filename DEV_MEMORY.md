@@ -99,6 +99,52 @@ or a DNS record created by the account owner.
 
 ---
 
+## 2026-10-22 — 🔑 A PLATFORM REQUEST REACHED US after the rotation
+
+The live tail caught it:
+
+```
+POST https://vfy-agent.hallo-alexa.workers.dev/agent - Ok @ 10/23/2026, 1:10:22 AM
+  (log) {"event":"request","method":"POST","path":"/agent","ua":""}
+```
+
+**`ua` is empty** — that is the platform's own service, not a browser and not
+my curl test (my three requests at 1:04:59 AM all carried `curl/8.18.0` and are
+clearly distinguishable). So the platform **successfully signed a request and
+delivered it** — which it could not do while its AES-256-GCM blob for that
+agent was undecryptable. **The rotation fixed the outbound path.**
+
+**What it was:** the request produced **no D1 row** — `vfy_turns` still holds
+only my own 12:58 test, and `answers` is empty. A gatekeeper task or a VFY turn
+would have written a row; **preflight writes nothing**. So it was a
+**preflight** (the "Test preflight" button), and it returned **200**.
+
+That is consistent with the whole diagnosis:
+- before the rotation: the platform could not decrypt its stored copy →
+  no outbound delivery, `FAILED (unsafe_endpoint)`
+- after the rotation: the blob was regenerated → preflight delivers and
+  returns 200
+
+**Confirm with the owner:** the dashboard should now show the preflight as
+passing for the rotated agent.
+
+### Logging enriched (so the next event is unambiguous)
+
+Every inbound request is logged with method, path and user-agent, and now the
+task handlers also log the **matched `agentKey`**:
+- `{"event":"preflight","agentKey":…,"taskId":…,"ok":true}`
+- `{"event":"proof-gatekeeper","agentKey":…,"decision":…,"reason_code":…}`
+- `{"event":"steal-the-vfy","agentKey":…,"matchId":…,"turn":…,"action":…}`
+
+`agentKey` is the short digest of the secret that matched, so it identifies
+WHICH agent a platform request belongs to without exposing the secret.
+
+**Next:** dispatch the VFY practice task and watch it land. If the platform now
+delivers the turn, the remaining question is the response schema (already
+fixed: `protocolVersion` + `public_signals` + `publicInputsHash`).
+
+---
+
 ## 2026-10-22 — Secret rotated: the AES-GCM decrypt theory is CONFIRMED
 
 The owner rotated the secret on the dashboard and supplied the new one-time
