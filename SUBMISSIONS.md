@@ -137,6 +137,12 @@ should an agent check before trusting another agent) + #06 (the agent I built)
 
 ---
 
+## Not a submission field — the dashboard "commitment"
+
+Proof Gatekeeper has **no commitment**; the commitment belongs to **Steal the
+VFY** and goes in Dashboard → My Agents → **jimmygreen** → Edit agent →
+**the Steal the VFY section**. Do not look for it on `missi`.
+
 ## Publishing checklist
 
 - [x] Wildcard: a real 32-byte on-chain proof reference, verified three ways

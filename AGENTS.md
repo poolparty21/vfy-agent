@@ -85,12 +85,67 @@ src/decide.js   the deterministic policy — pure, no I/O, fully unit tested
 src/worker.js   the HTTP contract: routing, preflight, task handlers
 src/store.js    D1 access: replay seen-set, answer cache, turn log
 src/zkverify.js on-chain verification (Kurier) + zkVerify RPC reads
-src/vfy.js      Steal the VFY turn responses, keccak-256
+src/vfy.js      Steal the VFY turn responses, keccak-256, circuit version
 scripts/verify-proof-reference.mjs   re-check the published proof reference
-test/           86 tests, no network access needed
+test/           87 tests, no network access needed
 schema.sql      D1 schema
 wrangler.toml   Worker config (D1 binding, vars; secrets are NOT here)
 ```
+
+## The commitment is a Steal the VFY field — not Proof Gatekeeper
+
+**Proof Gatekeeper has NO commitment.** The Gatekeeper page never mentions it;
+Steal the VFY does, and VFY's pre-tournament rule is *"You cannot enter the
+tournament without it."* So:
+
+| Agent | Event | commitment field? |
+|---|---|---|
+| `missi` | Proof Gatekeeper | **no — nothing to fill in** |
+| `jimmygreen` | Steal the VFY | **yes — Dashboard → My Agents → jimmygreen → Edit → the Steal the VFY section** |
+
+The four secrets map to the platform agents like this (proved by matching each
+secret to its agentKey and to the D1 rows):
+
+| secret env var | agentKey | agent |
+|---|---|---|
+| `AGENT_GAMES_HMAC_SECRET` | `d010c67c80f1f176` | missi (original) |
+| `AGENT_GAMES_HMAC_SECRET_JIMMYGREEN` | `57c2e98a1e7f2e6d` | jimmygreen (original) |
+| `AGENT_GAMES_HMAC_SECRET_ROTATED` | `96218151c607b016` | **jimmygreen (rotated) — the VFY agent** |
+| `AGENT_GAMES_HMAC_SECRET_MISSI_ROTATED` | `52293fd21240a55b` | **missi (rotated) — the Gatekeeper agent** |
+
+## The circuits are published — `/api/circuit-info`
+
+`GET https://agentgames.zkverify.io/api/circuit-info` returns each circuit's
+`vkHash` and artifact URLs (the wasm and zkey both download, HTTP 200). The old
+"artifacts are being prepared" blocker is gone.
+
+- gatekeeper vkHash `0x6b79c6012a6d8651f3e13bc4d2a20370280ab49700c90c5316d4168bfbad77b0`
+- vfyPolicy vkHash `0x6c56509f1c56fd1fd4e9737f906d2220f4b95f1d507f1adf6899085bd74be047`
+
+From the zkeys: gatekeeper has **12 public inputs**, vfy-policy has **8** — and
+our `publicInputsHash` covers exactly **eight** words, so its shape is right.
+
+The circuits' real input signal names (they are NOT strings in the wasm —
+circom hashes them with FNV-1a-64, so recover them by probing
+`getInputSignalSize`):
+
+- **vfy-policy** (17 inputs): `commitment`, `salt`, `matchId`, `turnNumber`,
+  `selfBalance`, `opponentBalance`, `action`, `amount`, `circuitVersion`
+  + 8 private witness inputs still to identify.
+- **gatekeeper** (13 inputs): `minimum`, `publicBalance`, `amount`,
+  `expiryBlock`, `currentBlock`, `recipient`, `conditionRecipient`,
+  `maxTransfer`, `salt`, `registeredVkHash` + 3 still to identify.
+
+Note `turnNumber` (not `turn`) and `registeredVkHash` (not `registeredVk`).
+
+## `resolverVersion` must be echoed VERBATIM
+
+The platform has sent **both** `"v1-draft"` and `"v1"`, and the build guide's
+example uses `"v1"`. The platform *"rejects any turn response that uses a
+different circuit version"*, so the response must use whatever the envelope
+said. `CIRCUIT_VERSION_CODE` maps both spellings to code 1 (same circuit), and
+an unknown version falls back to code 1 instead of throwing — a missing
+response is a delivery timeout (−2), which is worse than a wrong answer.
 
 ## The published proof reference
 

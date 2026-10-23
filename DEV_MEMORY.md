@@ -2,13 +2,18 @@
 
 > Session log, newest first. Project contract: `AGENTS.md`. Workspace log: `C:\mnt\www\DEV_MEMORY.md`.
 
-### The commitment the owner must register (and the dashboard's three fields)
+### The commitment the owner must register (Steal the VFY — jimmygreen, NOT missi)
+
+⚠️ **This table is for the STEAL THE VFY agent (`jimmygreen`).** Proof
+Gatekeeper has NO commitment field — do not look for one on missi, and do not
+paste these values there. The values go in Dashboard → My Agents →
+**jimmygreen** → Edit agent → **the Steal the VFY section**.
 
 The dashboard's Steal the VFY section needs a **commitment hash**, a **circuit
 version** and a **policy version**, and it refuses to save without them. The
 value below is what the agent now uses too — they MUST match, because the
 platform "independently computes this hash from the game state it knows and
-rejects any proof where the hashes diverge".
+rejects any proof where the hashes diverges".
 
 | Field | Value |
 |---|---|
@@ -29,6 +34,86 @@ the agent and the dashboard cannot drift apart.
 
 The rules permit changing it: *"You may redeploy and update your strategy
 commitment before each new round."*
+
+### 2026-10-23 — 🚨 The commitment belongs to STEAL THE VFY, not Proof Gatekeeper
+
+The owner reported: **"missi gatekeeper has no commitment"** — and that is
+CORRECT, and my instruction was wrong. The **commitment is a Steal the VFY
+concept only**. Proof Gatekeeper's page mentions "commitment" **zero** times;
+Steal the VFY's page mentions it **seven** times, and its pre-tournament
+requirement is *"Before Swiss Round 1 opens, register an active strategy
+commitment … You cannot enter the tournament without it."* So there is nothing
+to fix on missi — it has no commitment field because Gatekeeper needs none.
+
+**Where the commitment actually goes:** Dashboard → My Agents → **the agent
+entered into Steal the VFY** → Edit agent → **the Steal the VFY section**.
+That is `jimmygreen` (agentKey `96218151c607b016`), NOT missi.
+
+**Which agent is which** (proved by matching the four secrets to their keys and
+to the D1 rows — not assumed):
+
+| secret env var | agentKey | platform agent |
+|---|---|---|
+| `AGENT_GAMES_HMAC_SECRET` | `d010c67c80f1f176` | missi (original) — had the first VFY turn |
+| `AGENT_GAMES_HMAC_SECRET_JIMMYGREEN` | `57c2e98a1e7f2e6d` | jimmygreen (original) |
+| `AGENT_GAMES_HMAC_SECRET_ROTATED` | `96218151c607b016` | **jimmygreen (rotated) — the VFY agent** |
+| `AGENT_GAMES_HMAC_SECRET_MISSI_ROTATED` | `52293fd21240a55b` | **missi (rotated) — the Proof Gatekeeper agent** |
+
+The D1 rows agree: the gatekeeper practice row is `52293fd21240a55b` (missi),
+and the VFY turn that the platform ACCEPTED is `96218151c607b016` (jimmygreen).
+
+### 🔥 The circuit artifacts are PUBLISHED now — `/api/circuit-info`
+
+The long-standing blocker ("Circuit artifacts are being prepared … check back
+before the first scored round opens") is **gone**. A public endpoint appeared:
+
+```
+GET https://agentgames.zkverify.io/api/circuit-info
+```
+returns both circuits' `vkHash` and artifact URLs:
+- **gatekeeper** vkHash `0x6b79c6012a6d8651f3e13bc4d2a20370280ab49700c90c5316d4168bfbad77b0`
+  → `gatekeeper.wasm` (1.76 MB) + `gatekeeper_final.zkey` (310 KB)
+- **vfyPolicy** vkHash `0x6c56509f1c56fd1fd4e9737f906d2220f4b95f1d507f1adf6899085bd74be047`
+  → `vfy-policy.wasm` (2.99 MB) + `vfy-policy_final.zkey` (810 KB)
+
+All four files download (HTTP 200). 🟢 **This is the same `0x6b79c601…`
+value the platform sent as `strategyCommitment.hash` in the VFY turn and that
+is in D1 `known_vks`** — i.e. the Gatekeeper VK hash is the value the platform
+treats as the agent's commitment.
+
+**Decoding the circuits (snarkjs + circom_runtime):**
+- gatekeeper zkey: `nPublic: 13` → **12 public inputs**
+- vfy-policy zkey: `nPublic: 9` → **8 public inputs** — which matches our
+  `publicInputsHash` covering exactly **eight** words. **Our hash shape is right.**
+
+**The circuit's real input names** (recovered by probing `getInputSignalSize`
+with circom's FNV-1a-64 name hash — the names are NOT in the wasm as strings):
+
+- **vfy-policy** (17 inputs, 8 public): `commitment`, `salt`, `matchId`,
+  `turnNumber`, `selfBalance`, `opponentBalance`, `action`, `amount`,
+  `circuitVersion` — **plus 8 private witness inputs still unidentified.**
+  Note it is `turnNumber`, not `turn`.
+- **gatekeeper** (13 inputs, 12 public): `minimum`, `publicBalance`, `amount`,
+  `expiryBlock`, `currentBlock`, `recipient`, `conditionRecipient`,
+  `maxTransfer`, `salt`, `registeredVkHash` — **plus 3 more unidentified.**
+  Note `registeredVkHash` (not `registeredVk`) and `salt` is an INPUT too.
+
+**🚨  FOUND AND FIXED — a real production bug: `resolverVersion`**
+
+The platform has sent **two different** spellings of the circuit version: the
+first VFY turn carried `resolverVersion: "v1-draft"`, the later one carried
+`"v1"`, and the build guide's own example uses `"v1"`. Our code did
+`CIRCUIT_VERSION_CODE[env.resolverVersion] !== undefined ? env.resolverVersion
+: "v1-draft"` — so a `"v1"` envelope got answered with **`circuitVersion:
+"v1-draft"`**, and the platform *"rejects any turn response that uses a
+different circuit version."* That is a silent rejection on every scored round.
+
+Fixed: the envelope's version is echoed **verbatim**, and `CIRCUIT_VERSION_CODE`
+now maps both `"v1-draft"` and `"v1"` to code 1 (same draft circuit), with an
+unknown version falling back to code 1 rather than throwing (a missing response
+is a **timeout**, worse than a wrong answer). Live-verified: the deployed Worker
+now answers a `"v1"` envelope with `circuitVersion: "v1"` and 8 public signals.
+87 tests pass.
 
 ### 2026-10-23 — 🚨 CORRECTION: the round schedule is TBA, not "23–30 Oct, 6:30–8:30 PM IST"
 

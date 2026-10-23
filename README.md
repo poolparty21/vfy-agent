@@ -130,7 +130,7 @@ D1 (not KV — the replay check needs strong consistency):
 ## Develop
 
 ```bash
-npm test          # 86 tests, no network access required
+npm test          # 87 tests, no network access required
 ```
 
 Deploy (always with the **global** wrangler — a Windows-installed
