@@ -19,7 +19,26 @@
 //                                         version to match the commitment
 
 const ACTION_CODE = { HOLD: 0n, FORTIFY: 1n, EXTRACT: 2n };
-const CIRCUIT_VERSION_CODE = { "v1-draft": 1n };
+
+/**
+ * Numeric code of each circuit version, as the circuit encodes it.
+ *
+ * The turn envelope carries `resolverVersion`, and the response must use the
+ * SAME version ("the platform freezes it when matches are paired and rejects
+ * any turn response that uses a different circuit version"). The platform has
+ * used BOTH spellings — a live turn on 2026-10-22 carried `v1-draft`, a later
+ * one carried `v1`, and the build guide's own example uses `v1`. So the
+ * version is NOT a fixed constant on our side: it is whatever the envelope
+ * says, and the code is looked up per version.
+ *
+ * `v1` and `v1-draft` are two names for the same draft circuit, so they share
+ * code 1. If the platform ever sends an unknown version we still have to
+ * answer something, so we fall back to code 1 and echo the version verbatim —
+ * the alternative (silently claiming a different version) is what the guide
+ * calls out as a rejection cause.
+ */
+const CIRCUIT_VERSION_CODE = { "v1-draft": 1n, v1: 1n };
+const DEFAULT_CIRCUIT_VERSION = "v1-draft";
 
 export const POLICY = { name: "max-extract", version: "1", extractCap: 10 };
 
@@ -125,8 +144,10 @@ export function publicInputsHash({
   action,
   circuitVersion,
 }) {
-  const versionCode = CIRCUIT_VERSION_CODE[circuitVersion];
-  if (versionCode === undefined) throw new Error(`unknown circuit version ${circuitVersion}`);
+  // An unknown version still has to be answered (a missing response is a
+  // timeout, which is worse than a wrong answer). Fall back to code 1 — the
+  // same draft circuit under another name — and echo the version verbatim.
+  const versionCode = CIRCUIT_VERSION_CODE[circuitVersion] ?? 1n;
   const fields = [
     commitment,
     matchIdWord(matchId),
@@ -249,10 +270,13 @@ export function chooseAction(state, policy = POLICY) {
  */
 export function buildTurnResponse(env, now = new Date(), registeredCommitment) {
   const action = chooseAction(env.state);
+  // Echo the envelope's version VERBATIM. The platform rejects a response that
+  // uses a different circuit version, so answering "v1-draft" to a "v1"
+  // envelope would be rejected even though the hash is right.
   const circuitVersion =
-    env.resolverVersion && CIRCUIT_VERSION_CODE[env.resolverVersion] !== undefined
+    typeof env.resolverVersion === "string" && env.resolverVersion
       ? env.resolverVersion
-      : "v1-draft";
+      : DEFAULT_CIRCUIT_VERSION;
   const policyProof = { circuitVersion };
   const commitment = env.strategyCommitment?.hash ?? registeredCommitment;
   if (commitment) {

@@ -53,19 +53,55 @@ test("publicInputsHash is deterministic and order-sensitive", () => {
   );
 });
 
-test("publicInputsHash rejects an unknown circuit version", () => {
-  assert.throws(
-    () =>
-      publicInputsHash({
-        commitment: "0x" + "11".repeat(32),
-        matchId: "1",
+test("publicInputsHash falls back to code 1 for an unknown circuit version", () => {
+  // An unknown version must still be ANSWERED: a missing response is a
+  // delivery timeout (-2), which is worse than a wrong answer. The version is
+  // echoed verbatim (so it still matches the commitment) and the numeric code
+  // falls back to 1, the same draft circuit under another name.
+  const hash = publicInputsHash({
+    commitment: "0x" + "11".repeat(32),
+    matchId: "1",
+    turn: 1,
+    selfBalance: 1,
+    opponentBalance: 1,
+    action: { type: "HOLD" },
+    circuitVersion: "v2-unknown",
+  });
+  const sameAsDraft = publicInputsHash({
+    commitment: "0x" + "11".repeat(32),
+    matchId: "1",
+    turn: 1,
+    selfBalance: 1,
+    opponentBalance: 1,
+    action: { type: "HOLD" },
+    circuitVersion: "v1-draft",
+  });
+  assert.equal(hash, sameAsDraft);
+});
+
+test("buildTurnResponse echoes the envelope's resolverVersion verbatim", () => {
+  // The platform "rejects any turn response that uses a different circuit
+  // version". It has sent BOTH "v1" and "v1-draft", so we must not force
+  // one spelling — and both must hash to the same code (same circuit).
+  const mk = (resolverVersion) =>
+    buildTurnResponse(
+      {
+        resolverVersion,
+        strategyCommitment: { hash: "0x" + "11".repeat(32) },
+        matchId: "m",
         turn: 1,
-        selfBalance: 1,
-        opponentBalance: 1,
-        action: { type: "HOLD" },
-        circuitVersion: "v2-unknown",
-      }),
-    /unknown circuit version/,
+        state: { selfBalance: 100, opponentBalance: 100 },
+      },
+      new Date(0),
+      "0x" + "22".repeat(32),
+    );
+  assert.equal(mk("v1").policyProof.circuitVersion, "v1");
+  assert.equal(mk("v1-draft").policyProof.circuitVersion, "v1-draft");
+  assert.equal(mk(undefined).policyProof.circuitVersion, "v1-draft");
+  // Same circuit, so the hash must not depend on which spelling was used.
+  assert.equal(
+    mk("v1").policyProof.publicInputsHash,
+    mk("v1-draft").policyProof.publicInputsHash,
   );
 });
 
