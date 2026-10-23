@@ -30,6 +30,50 @@ the agent and the dashboard cannot drift apart.
 The rules permit changing it: *"You may redeploy and update your strategy
 commitment before each new round."*
 
+### 2026-10-23 — 🚨 CORRECTION: the round schedule is TBA, not "23–30 Oct, 6:30–8:30 PM IST"
+
+An earlier note in this file (from the 22 Oct session) recorded the round window
+as **23–30 Oct, 6:30–8:30 PM IST**. **That is no longer what the site
+publishes.** The live home-page timeline block now reads:
+
+| Date | What |
+|---|---|
+| 21 OCT | Registrations are open now. |
+| 21 OCT – 19 NOV | Participation in the Creator and Wildcard tracks begins. |
+| **TBA** | **Proof Gatekeeper and Steal the VFY — timeline to be announced.** |
+| 2 NOV | An IRL showdown in Mumbai during DevCon week. |
+| 19 NOV | The Agent Games close. |
+
+Both event pages agree: Proof Gatekeeper's round widget says
+*"Timeline to be announced · 8 tasks per agent per round"* and every one of
+Round 01–08 reads **UPCOMING**, Issued 0 / Responded 0 / Verified 0; Steal
+the VFY says *"Schedule: Timeline to be announced"* with *"0 Agents paired —
+Current round 0 Matches"*. `/api/stats` agrees: `proofsVerified: 0`,
+`activeAgents: 6`, `builders: 47`. `/api/leaderboard` is `[]`.
+
+**No clock time is published anywhere public.** A case-insensitive sweep of
+home / rules / guide / build / proof-gatekeeper / steal-the-vfy for
+`6:30|8:30|18:30|20:30|PM IST` returns nothing. So the earlier IST window was
+either never announced on the site or was withdrawn — it is not a fact to
+plan around.
+
+**Why this matters:** the rules say *"One agent per owner in this event; entries
+lock while a round is open."* Entering is therefore a one-shot, irreversible,
+per-event action — so **declare the entry EARLY** (before a round opens, not
+during) and get the two entries in. The participation flow the rules spell out
+is: **Declare entry** ("Add your agent to Proof Gatekeeper during registration,
+or from your agent settings page") → **Pass preflight** (reachability +
+response-schema check + a practice turn) → receive tasks → submit to
+zkVerify → evaluate → return a decision.
+
+**Also: there is no "Enter" button on the public event pages** — the visible
+`Enter event` / `Enter the Games` CTAs point at `/register`, which redirects a
+logged-in user to `/dashboard`. Entry into an *event* is done from the
+dashboard's agent settings (or at registration), per the rules' step 1.
+
+Note the round widget also says *"8 tasks/agent/round"* and the rules cap
+practice at *"10 dispatches per active agent per hour"*.
+
 ### 2026-10-23 — ✅ A REAL, FINALIZED zkVerify PROOF REFERENCE (the blocker)
 
 The Wildcard submission needs a genuine 32-byte on-chain proof reference, and
@@ -1024,7 +1068,7 @@ secret is ever exposed, or the platform itself asks for one.)
 |---|---|
 | 21 Oct | Registrations open |
 | 21 Oct – 19 Nov | Creator and Wildcard tracks run |
-| **23 Oct – 30 Oct** | **Proof Gatekeeper and Steal the VFY open** (8 daily rounds, 6:30–8:30 PM IST) |
+| ~~23 Oct – 30 Oct~~ → **TBA** | **Proof Gatekeeper and Steal the VFY — timeline to be announced.** (The 23–30 Oct / 6:30–8:30 PM IST window recorded here on 22 Oct is no longer published — see the 23 Oct CORRECTION entry above.) |
 | 2 Nov | IRL showdown in Mumbai, DevCon week |
 | 19 Nov | The Agent Games close |
 
@@ -1102,7 +1146,7 @@ Next.js JS chunks and the rules page:
 7. **Circom artifacts are NOT published yet** ("Circuit artifacts are being
    prepared — check back before the first scored round opens"), so the
    Groth16 policy proof for Steal the VFY cannot be generated yet.
-8. **Rounds**: 23–30 Oct 2026, 6:30–8:30 PM IST, 8 tasks/agent/round.
+8. **Rounds**: schedule TBA as of 23 Oct (see the CORRECTION entry above); 8 tasks/agent/round.
    Practice: 10 dispatches/hour, does not affect the leaderboard.
 9. The platform's `/api/*` is not browsable (404s) and the dashboard is
    client-side rendered behind SIWE wallet auth — the protocol details had to
