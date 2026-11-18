@@ -2,6 +2,80 @@
 
 > Session log, newest first. Project contract: `AGENTS.md`. Workspace log: `C:\mnt\www\DEV_MEMORY.md`.
 
+### 2026-11-18 — Prover review: proof time can no longer eat the answer window
+
+**Scope of `7a6c917`.** A review pass over the prover that `1f28378` landed:
+simplify, delete what nothing used, and make the deadline arithmetic provable.
+With **no prover configured, behaviour is byte-for-byte the old behaviour**
+(same D1 reads, zero requests, no `proof` key); with a prover there are two
+real fixes and one large deletion.
+
+**Defect 1 — a "skipped" verification still spent 2 seconds.**
+`handleGatekeeper` gated verification on `MIN_VERIFY_BUDGET_MS` and passed
+`budgetMs = 0`, but `verifyProof` then called Kurier with
+`Math.max(2000, …)` — so the step the gate had just declared unaffordable went
+out on the wire anyway. `verifyProof` now returns `not_attempted` before doing
+anything when `budgetMs <= 0`.
+
+**Defect 2 — proof generation was budgeted with the verifier's constant.**
+The prover's ceiling was `MAX_VERIFY_BUDGET_MS` plus a bare `- 2000` and a
+second `left > 1000` floor: three magic numbers for one deadline, and nothing
+stopped verification + proving from stacking past the window. Now:
+
+| constant / rule | value | why |
+|---|---|---|
+| `ANSWER_RESERVE_MS` | 2000 | what the D1 write and the signature need; proof generation may never spend it |
+| `MAX_PROOF_BUDGET_MS` | 4000 | a warm prover is 67–125 ms; the cap only bounds a hung one |
+| deadline re-read after verification | `deadlineBudgetMs(task) - ANSWER_RESERVE_MS` | the verifier's spend is already subtracted, so the two stages cannot add up past the deadline |
+| budget `< 500` | no request at all | `requestProof` owns "is there a prover" — the handler no longer pre-checks it |
+
+**Deleted because nothing reached it.** `alternate` / `allowAlternate`: a map
+export, a two-attempt loop in the prover, an option on `requestProof`, two
+response fields, and `proved.verified` / `proved.alternate` that were computed
+and never read — no caller ever set the flag. `POST /reload`: no caller, and
+signature-gated, so it was not even a convenient manual knob.
+`proverConfigured`'s export (no importer left), and `/health`'s `.catch()` around
+a function that cannot throw.
+
+**Kept on purpose, not overlooked.** The four `TASK_ID_ENCODINGS` (the only way
+to settle the platform's encoding without a redeploy), the prover's unsigned
+`/health` (liveness for a public tunnel), the worker-side `curve` normalisation
+(the Worker must tolerate an older prover), and `supervisor.mjs` untouched.
+
+**Tests that make a wrong mapping fail in `npm test`, not in a scored round**
+
+| file | what it pins |
+|---|---|
+| `test/gatekeeper-map.test.js` (13) | the 13 signals **in circuit order** (deepEqual alone ignores key order), golden values with every platform input distinct so any swap fails, APPROVE/REJECT/other → `1`/`0`/`0`, field reduction (`P+7`→`7`, `P`→`0`, hex, a 2^200 decimal), a missing input throws instead of emitting garbage, salt fresh and inside the field, all four encodings against goldens, unknown-encoding fallback, numeric id == its text form |
+| `test/prover.test.js` (+7) | registration → prove through a mocked `fetch`: the call goes to the **registered** url with exactly `{circuit, payload}` and an HMAC over **those bytes**; a fresh registration beats `PROVER_URL`; a prover advertising the wrong circuit gets **zero** calls; a response signed with the wrong token, a 422, or a 200 without a proof all yield `null`; a hung prover aborts inside the budget; a 499 ms budget or a stale row means zero calls |
+
+**`npm test` was running 0 tests.** The script was
+`node --test 'test/*.test.js'`; Node 22 treats the quoted pattern as a literal
+path (and a directory argument as a module), so it reported `# tests 0` and
+exited 0 — a green-looking check that tested nothing. It is now plain
+`node --test`, which discovers all 116.
+
+**Measured rather than reasoned about** — hung prover (accepts, never answers),
+answer returned through the real `fetch` handler:
+
+| envelope window | proof budget | answered at | reserve left |
+|---|---|---|---|
+| 3 s | 1000 ms | 1005 ms | ~2 s |
+| 6 s | 4000 ms | 4005 ms | ~2 s |
+| 15 s | 4000 ms | 4010 ms | ~11 s |
+
+No prover at all: **1 ms, 0 requests**, no `proof` key — today's behaviour.
+
+**Mutation-checked so the tests are not decoration**: dropping the signature
+header failed one test, preferring `PROVER_URL` over the registration failed
+one, and swapping `recipient`/`condition_recipient` in the map failed one. Each
+time the source was restored byte-identical and the suite went green again.
+
+**State at commit time.** 116/116. Live probe through the deployed Worker after
+the 17:26Z supervisor restart: `APPROVE`/`VALID_PROOF`, 13 public signals,
+`groth16.verify: true`, prover `ms=67`. The prover still dies with this PC — a
+fixed host is the only real fix (see the options in the run log).
+
 ### 2026-11-18 — The prover now re-registers itself, so a tunnel restart self-heals
 
 **The failure this fixes.** The prover is reached through a Cloudflare **quick
