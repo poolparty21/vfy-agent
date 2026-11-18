@@ -67,6 +67,29 @@ export async function listKnownVks(db) {
   return (res?.results ?? []).map((r) => r.vk_hash);
 }
 
+/**
+ * Record the prover's current url (single row).
+ *
+ * A quick tunnel gets a new hostname on every restart, so the prover tells us
+ * where it is; `updated_at` is also its heartbeat, and the Worker treats a row
+ * older than the cutoff as "prover is down", not "prover moved".
+ */
+export async function saveProver(db, { url, circuits = [], now = new Date() }) {
+  if (!db || !url) return;
+  await db
+    .prepare(
+      "INSERT INTO prover (id, url, circuits, updated_at) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET url = excluded.url, circuits = excluded.circuits, updated_at = excluded.updated_at",
+    )
+    .bind(url, JSON.stringify(circuits), now.toISOString())
+    .run();
+}
+
+/** The last registered prover url, without judging how fresh it is. */
+export async function getProver(db) {
+  if (!db) return null;
+  return (await db.prepare("SELECT url, circuits, updated_at FROM prover WHERE id = 1").first()) ?? null;
+}
+
 /** Store a Steal the VFY turn and read back a previous answer for it. */
 export async function getVfyTurn(db, agentKey, matchId, turn) {
   if (!db) return null;

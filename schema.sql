@@ -51,3 +51,18 @@ CREATE TABLE IF NOT EXISTS known_vks (
   vk_hash    TEXT PRIMARY KEY,
   first_seen TEXT NOT NULL
 );
+
+-- The prover's CURRENT public URL, re-registered by the prover itself.
+--
+-- A Cloudflare quick tunnel gets a new hostname every time it restarts, so a
+-- url baked into wrangler.toml goes stale and proofs stop silently. The
+-- prover posts its url here (signed with PROVER_TOKEN) on start and every two
+-- minutes; the Worker prefers this row over PROVER_URL and ignores it once
+-- `updated_at` is older than the cutoff (the prover is down, not moved).
+-- Single row: one Worker, one prover.
+CREATE TABLE IF NOT EXISTS prover (
+  id         INTEGER PRIMARY KEY,
+  url        TEXT NOT NULL,
+  circuits   TEXT NOT NULL,   -- JSON array of circuit names it can prove
+  updated_at TEXT NOT NULL
+);

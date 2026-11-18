@@ -1,0 +1,14 @@
+{
+  "name": "vfy-prover",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Groth16 prover for the vfy-agent Worker (runs outside the Worker: proving needs more CPU than a Worker allows)",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "circom_runtime": "^0.1.28",
+    "snarkjs": "^0.7.6"
+  }
+}

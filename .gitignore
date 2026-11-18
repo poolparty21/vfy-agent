@@ -16,3 +16,8 @@ node_modules/
 # The private strategy salt for the Steal the VFY commitment. Never commit it.
 .strategy-salt
 .tooling/
+
+# The prover shared secret and its circuit binaries
+.prover-token
+prover/circuits/*/circuit.wasm
+prover/circuits/*/circuit.zkey

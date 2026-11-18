@@ -36,6 +36,7 @@ import {
   DEFAULT_RPC,
 } from "./zkverify.js";
 import { buildTurnResponse, fallbackTurnResponse, isVfyTurn } from "./vfy.js";
+import { requestProof, proverConfigured, currentProver, handleProverRegister, PROVER_PATH } from "./prover.js";
 
 const enc = new TextEncoder();
 
@@ -235,8 +236,37 @@ async function handleGatekeeper(env, task, sign) {
   // model adds a further −2 for a provable task answered without a valid
   // Groth16 proof, and the reliability bonus is pro-rated by the share of
   // provable tasks whose proof verifies.
-  const proof = pick(input, ["proof", "groth16_proof", "proof_data"]);
-  const publicSignals = pick(input, ["public_signals", "publicSignals", "public_inputs"]);
+  let proof = pick(input, ["proof", "groth16_proof", "proof_data"]);
+  let publicSignals = pick(input, ["public_signals", "publicSignals", "public_inputs"]);
+
+  // No proof material in the task: generate our own with the platform's
+  // gatekeeper circuit. The proof covers the decision, so the circuit itself
+  // refuses a decision its rules disagree with — if it refuses ours, we still
+  // answer (without a proof) rather than flipping the decision to suit it.
+  // A wrong APPROVE costs -6, twice a wrong REJECT, so the policy stays the
+  // authority and the proof is only ever attached to the decision we chose.
+  let proved = null;
+  if (!proof && proverConfigured(env)) {
+    const left = deadlineBudgetMs(task) - 2000;
+    if (left > 1000) {
+      const generated = await requestProof(
+        env,
+        "gatekeeper",
+        {
+          input,
+          taskId,
+          decision: verdict.decision,
+          taskIdEncoding: env.TASKID_ENCODING ?? "keccakModP",
+        },
+        Math.min(MAX_VERIFY_BUDGET_MS, left),
+      );
+      if (generated) {
+        proof = generated.proof;
+        publicSignals = generated.public_signals;
+        proved = { ms: generated.ms, verified: generated.verified, alternate: generated.alternate };
+      }
+    }
+  }
 
   const response = {
     decision: verdict.decision,
@@ -257,6 +287,8 @@ async function handleGatekeeper(env, task, sign) {
       reason_code: response.reason_code,
       replay: isReplay,
       verification: verification.status,
+      proof: proved ? "attached" : proof ? "echoed" : "none",
+      proof_ms: proved?.ms ?? null,
     }),
   );
   return send(env, 200, response, sign);
@@ -305,12 +337,30 @@ export default {
     const url = new URL(request.url);
 
     // Health endpoint, unauthenticated, for uptime monitoring.
+    //
+    // It also reports where the prover currently is, because the failure mode
+    // this guards is silent: a restarted tunnel used to leave PROVER_URL stale
+    // and every answer quietly lost its proof (-2 each). `prover: null` or a
+    // rising `age_ms` here is the early warning; the url itself is not exposed.
     if ((request.method === "GET" || request.method === "HEAD") &&
         (url.pathname === "/health" || url.pathname === "/")) {
-      return new Response(JSON.stringify({ ok: true, agent: "vfy-agent" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      const prover = await currentProver(env).catch(() => null);
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          agent: "vfy-agent",
+          prover: prover
+            ? { source: prover.source, age_ms: prover.ageMs ?? null, circuits: prover.circuits }
+            : null,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    // The prover announcing its current tunnel url. Signed with PROVER_TOKEN
+    // over the raw body, checked before parsing — the same rule as /agent.
+    if (url.pathname === PROVER_PATH && request.method === "POST") {
+      return await handleProverRegister(request, env);
     }
 
     const agentPath = env.AGENT_PATH ?? "/agent";

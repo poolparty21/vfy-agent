@@ -86,6 +86,9 @@ src/worker.js   the HTTP contract: routing, preflight, task handlers
 src/store.js    D1 access: replay seen-set, answer cache, turn log
 src/zkverify.js on-chain verification (Kurier) + zkVerify RPC reads
 src/vfy.js      Steal the VFY turn responses, keccak-256, circuit version
+src/prover.js   prover client + signed url registration (optional; no prover ⇒ no proof)
+prover/         the prover: snarkjs + the gatekeeper signal map (own package)
+prover/supervisor.mjs   runs tunnel + prover and re-registers the tunnel url
 scripts/verify-proof-reference.mjs   re-check the published proof reference
 test/           87 tests, no network access needed
 schema.sql      D1 schema
@@ -197,6 +200,20 @@ npm test                              # 53 tests, no network
 /home/unexpected/.npm-global/bin/wrangler deploy
 /home/unexpected/.npm-global/bin/wrangler d1 execute vfy-agent --remote --file=schema.sql
 /home/unexpected/.npm-global/bin/wrangler secret put AGENT_GAMES_HMAC_SECRET
+```
+
+```bash
+# The prover, and the tunnel in front of it: ONE command.
+# Proving does not fit in a Worker, and a quick tunnel gets a NEW hostname on
+# every restart — so the supervisor re-registers the current url with the
+# Worker (signed with PROVER_TOKEN, stored in D1 `prover`, 10-minute cutoff).
+# QUIC is blocked on this machine, so the tunnel is forced to http2.
+cd prover && npm install          # once
+cd .. && node prover/supervisor.mjs
+# Watch it with: GET /health → { prover: { source, age_ms, circuits } }
+#   source "registration" = the prover told us where it is (normal)
+#   source "config"       = PROVER_URL fallback (no fresh registration)
+#   prover: null          = no prover; answers are still correct, just unproved
 ```
 
 ⚠️ **Use the GLOBAL wrangler** (`/home/unexpected/.npm-global/bin/wrangler`).

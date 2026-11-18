@@ -128,7 +128,11 @@ const gatekeeperTask = (inputOverrides = {}, taskOverrides = {}) => ({
 test("health endpoint answers without a signature", async () => {
   const res = await worker.fetch(new Request("https://example.test/health"), env());
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { ok: true, agent: "vfy-agent" });
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.agent, "vfy-agent");
+  // Nothing registered in this environment, so no prover is reported.
+  assert.equal(body.prover, null);
 });
 
 test("preflight returns ok and a signed response", async () => {

@@ -56,7 +56,27 @@ KURIER_API_BASE = "https://api.kurier.xyz/api/v1"
 # platform publishes the circuit artifacts and the real Hash(W, R) is known.
 STRATEGY_COMMITMENT = "0xf5a9f63b77aae9bde37211246d9a923026de3059faf48eef3fdf3a324014e1e2"
 
+# OPTIONAL static prover url — normally left empty.
+#
+# The prover now registers its CURRENT url itself (POST /prover/register,
+# signed with PROVER_TOKEN, stored in the `prover` D1 table with a 10-minute
+# staleness cutoff), so a restarted quick tunnel self-heals and nothing here
+# needs editing. This var is only a fallback for a prover that lives at a
+# fixed host and does not register; the Worker uses it ONLY when there is no
+# fresh registration. A quick-tunnel hostname here goes stale on every restart
+# and then costs each task a dead round trip before it gives up, so leave it
+# empty unless the prover is at a stable host.
+PROVER_URL = ""
+
+# How the task_id is turned into a field element for the gatekeeper circuit.
+# The platform has not published its encoding; the proof still verifies against
+# the registered key either way, and practice settles which one it expects.
+TASKID_ENCODING = "keccakModP"
+
 # Secrets (set with `wrangler secret put`, never committed):
+#   PROVER_TOKEN              - shared with the prover; signs every request and
+#                                response between the Worker and the prover,
+#                                and signs the prover's url registration
 #   AGENT_GAMES_HMAC_SECRET   - the first agent's secret (kept for the
 #                                single-agent case)
 #   AGENT_GAMES_HMAC_SECRETS  - comma-separated list, when SEVERAL agents
