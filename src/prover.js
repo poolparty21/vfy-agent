@@ -40,9 +40,7 @@ const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json" } });
 
 /** True when this deployment has any prover configured at all. */
-export function proverConfigured(env) {
-  return Boolean(String(env.PROVER_TOKEN ?? "").trim()) && Boolean(env.PROVER_URL || env.DB);
-}
+const proverConfigured = (env) => Boolean(String(env.PROVER_TOKEN ?? "").trim()) && Boolean(env.PROVER_URL || env.DB);
 
 /**
  * Where the prover is right now.
@@ -124,11 +122,12 @@ export async function handleProverRegister(request, env) {
  * @param {object} env
  * @param {string} circuit       "gatekeeper" | "steal-the-vfy"
  * @param {object} payload       whatever the circuit's map expects
- * @param {number} budgetMs      hard ceiling for the whole round trip
- * @param {{allowAlternate?: boolean}} [opts]
- * @returns {Promise<{proof: object, public_signals: string[], verified: boolean|null, alternate: boolean, ms: number|null}|null>}
+ * @param {number} budgetMs      hard ceiling for the whole round trip; below
+ *                               500 ms nothing is attempted at all
+ * @returns {Promise<{proof: object, public_signals: string[],
+ *   verified: boolean|null, ms: number|null}|null>}  null means no proof; never throws
  */
-export async function requestProof(env, circuit, payload, budgetMs, { allowAlternate = false } = {}) {
+export async function requestProof(env, circuit, payload, budgetMs) {
   if (!proverConfigured(env) || budgetMs < 500) return null;
   const prover = await currentProver(env);
   if (!prover) return null;
@@ -138,7 +137,7 @@ export async function requestProof(env, circuit, payload, budgetMs, { allowAlter
     return null;
   }
 
-  const body = enc.encode(JSON.stringify({ circuit, payload, allowAlternate }));
+  const body = enc.encode(JSON.stringify({ circuit, payload }));
   try {
     const res = await fetch(`${prover.url}/prove`, {
       method: "POST",
@@ -166,7 +165,6 @@ export async function requestProof(env, circuit, payload, budgetMs, { allowAlter
       proof: { ...out.proof, curve: out.proof.curve ?? "bn128" },
       public_signals: out.public_signals,
       verified: out.verified ?? null,
-      alternate: Boolean(out.alternate),
       ms: out.ms ?? null,
     };
   } catch (err) {

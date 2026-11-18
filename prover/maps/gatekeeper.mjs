@@ -58,9 +58,3 @@ export default ({ input, taskId, decision, taskIdEncoding }) => ({
   decision: decision === "APPROVE" ? "1" : "0",
   salt: BigInt("0x" + randomBytes(31).toString("hex")).toString(),
 });
-
-/** The circuit's other decision — tried only when the caller allows it. */
-export const alternate = (payload) => ({
-  ...payload,
-  decision: payload.decision === "APPROVE" ? "REJECT" : "APPROVE",
-});

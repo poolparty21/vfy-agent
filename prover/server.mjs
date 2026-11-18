@@ -71,7 +71,7 @@ async function loadCircuits() {
     const vkeyPath = join(d, "vkey.json");
     const vkey = existsSync(vkeyPath) ? JSON.parse(readFileSync(vkeyPath, "utf8")) : await snarkjs.zKey.exportVerificationKey(zkey);
     const calc = await WitnessCalculatorBuilder(readFileSync(wasm));
-    circuits.set(name, { wasm, zkey, vkey, calc, mapInput: mod.default, alternate: mod.alternate ?? null });
+    circuits.set(name, { wasm, zkey, vkey, calc, mapInput: mod.default });
     console.log(`${name}: ready (nPublic ${vkey.nPublic})`);
   }
 }
@@ -108,39 +108,27 @@ createServer((req, res) => {
       return reply(res, 400, { error: "bad json" });
     }
 
-    if (req.url === "/reload") {
-      await loadCircuits();
-      return reply(res, 200, { circuits: [...circuits.keys()] });
-    }
     if (req.url !== "/prove") return reply(res, 404, { error: "not found" });
 
     const c = circuits.get(msg.circuit);
     if (!c) return reply(res, 404, { error: `no circuit ${msg.circuit}` });
 
     const t0 = Date.now();
-    // The circuit only proves what its rules allow. If the requested payload
-    // fails and an alternate exists (Gatekeeper: the other decision), try it
-    // and report which one proved — the caller decides what to do with that.
-    const attempts = [msg.payload, ...(c.alternate && msg.allowAlternate ? [c.alternate(msg.payload)] : [])];
-    for (const [i, payload] of attempts.entries()) {
-      try {
-        const { proof, publicSignals } = await serialize(() => proveWith(c, c.mapInput(payload)));
-        // Cheap (~50 ms) and worth it: never hand the Worker a proof that does
-        // not verify against the platform's own key.
-        const verified = await snarkjs.groth16.verify(c.vkey, publicSignals, proof);
-        console.log(`prove ${msg.circuit} attempt=${i} ms=${Date.now() - t0} verified=${verified}`);
-        return reply(res, 200, {
-          proof,
-          public_signals: publicSignals,
-          verified,
-          alternate: i > 0,
-          ms: Date.now() - t0,
-        });
-      } catch (err) {
-        console.warn(`prove ${msg.circuit} attempt=${i} refused:`, String(err?.message).split("\n").filter(Boolean).slice(-1)[0]);
-      }
+    // One attempt only. The circuit refuses a witness its rules disagree with,
+    // and that refusal IS the answer: the Worker never wants the other decision
+    // proved (a wrong APPROVE costs twice a wrong REJECT), so the policy picks
+    // the decision and the circuit only confirms it.
+    try {
+      const { proof, publicSignals } = await serialize(() => proveWith(c, c.mapInput(msg.payload)));
+      // Cheap (~50 ms) and worth it: never hand the Worker a proof that does
+      // not verify against the platform's own key.
+      const verified = await snarkjs.groth16.verify(c.vkey, publicSignals, proof);
+      console.log(`prove ${msg.circuit} ms=${Date.now() - t0} verified=${verified}`);
+      return reply(res, 200, { proof, public_signals: publicSignals, verified, ms: Date.now() - t0 });
+    } catch (err) {
+      console.warn(`prove ${msg.circuit} refused:`, String(err?.message).split("\n").filter(Boolean).slice(-1)[0]);
+      return reply(res, 422, { error: "not provable", ms: Date.now() - t0 });
     }
-    reply(res, 422, { error: "not provable", ms: Date.now() - t0 });
   });
 }).listen(PORT, "127.0.0.1", async () => {
   console.log(`prover on 127.0.0.1:${PORT}, circuits: ${[...circuits.keys()].join(", ") || "none"}`);

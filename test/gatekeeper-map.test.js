@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import toSignals, { taskIdField, TASK_ID_ENCODINGS, alternate } from "../prover/maps/gatekeeper.mjs";
+import toSignals, { taskIdField, TASK_ID_ENCODINGS } from "../prover/maps/gatekeeper.mjs";
 
 const P = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
@@ -145,13 +145,4 @@ test("every encoding returns a decimal string below the modulus", () => {
     assert.match(value, /^\d+$/, `${name} must be a decimal string`);
     assert.ok(BigInt(value) < P, `${name} must be inside the field`);
   }
-});
-
-test("alternate flips only the decision", () => {
-  const approve = payload();
-  const flipped = alternate(approve);
-  assert.equal(flipped.decision, "REJECT");
-  assert.equal(alternate(flipped).decision, "APPROVE");
-  assert.notEqual(flipped, approve, "the payload itself is left untouched");
-  assert.equal(approve.decision, "APPROVE");
 });

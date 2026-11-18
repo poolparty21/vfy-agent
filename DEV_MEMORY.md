@@ -136,10 +136,12 @@ off, the Worker still answers correctly, just without a proof (−2/task, the ol
 behaviour).
 
 **Not done, deliberately:** flipping our decision to whatever the circuit can
-prove (`alternate`). It would let the circuit referee every answer, but it also
-would turn a genuine replay into an APPROVE, which costs −6. With three days
-left and our policy at 36/37 correct, the safe half (`+2` for provable answers)
-is worth taking and the flip is not.
+prove. It would let the circuit referee every answer, but it also would turn a
+genuine replay into an APPROVE, which costs −6. With three days left and our
+policy at 36/37 correct, the safe half (`+2` for provable answers) is worth
+taking and the flip is not. The `allowAlternate` plumbing that would have driven
+it was removed on 2026-11-18: nothing ever set it, so it was one dead branch in
+the prover and two unused response fields in the Worker.
 
 ### The commitment the owner must register (Steal the VFY — jimmygreen, NOT missi)
 
@@ -1384,8 +1386,9 @@ AMOUNT_OVERFLOW ~6%.
 
 ### Gotchas hit
 
-- `node --test test/` fails on Node 24 — the directory must be a glob:
-  `node --test 'test/*.test.js'`.
+- `node --test test/` fails on Node 22/24 — the directory is loaded as a module. Bare
+  `node --test` is what `npm test` runs: it discovers every `*.test.js` from the repo
+  root. The quoted `node --test 'test/*.test.js'` form silently reports 0 tests.
 - The `editor` tool's `insert_line` inserts BEFORE that line and truncated
   the tail of files when the payload was large. Two files needed repair
   afterwards. Prefer creating a file in one shot, or verify the tail after

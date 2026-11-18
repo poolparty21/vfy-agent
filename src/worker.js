@@ -36,7 +36,7 @@ import {
   DEFAULT_RPC,
 } from "./zkverify.js";
 import { buildTurnResponse, fallbackTurnResponse, isVfyTurn } from "./vfy.js";
-import { requestProof, proverConfigured, currentProver, handleProverRegister, PROVER_PATH } from "./prover.js";
+import { requestProof, currentProver, handleProverRegister, PROVER_PATH } from "./prover.js";
 
 const enc = new TextEncoder();
 
@@ -73,6 +73,18 @@ const PROOF_REFERENCE = {
  */
 const MAX_VERIFY_BUDGET_MS = 6000;
 const MIN_VERIFY_BUDGET_MS = 3000;
+
+/**
+ * What the answer itself needs once every optional step is done: the D1 write
+ * and the signature. Proof generation is never allowed to spend this.
+ */
+const ANSWER_RESERVE_MS = 2000;
+
+/**
+ * Ceiling for one proof generation. A warm prover answers in ~70-125 ms; the
+ * cap is only there so a hung prover costs the proof and not the answer.
+ */
+const MAX_PROOF_BUDGET_MS = 4000;
 
 /**
  * How many milliseconds are left before the platform's deadline.
@@ -133,6 +145,9 @@ async function verifyProof(env, input, budgetMs = 12_000) {
   const proofTx = pick(input, ["proof_tx", "proofTx"]);
 
   const result = { ok: false, failed: false, txHash: null, status: "not_attempted" };
+  // A zero budget means the window is already too short to spend, so nothing is
+  // attempted. Without this the Kurier client's 2s floor would spend it anyway.
+  if (budgetMs <= 0) return result;
   const started = Date.now();
   const left = () => budgetMs - (Date.now() - started);
 
@@ -245,26 +260,30 @@ async function handleGatekeeper(env, task, sign) {
   // answer (without a proof) rather than flipping the decision to suit it.
   // A wrong APPROVE costs -6, twice a wrong REJECT, so the policy stays the
   // authority and the proof is only ever attached to the decision we chose.
-  let proved = null;
-  if (!proof && proverConfigured(env)) {
-    const left = deadlineBudgetMs(task) - 2000;
-    if (left > 1000) {
-      const generated = await requestProof(
-        env,
-        "gatekeeper",
-        {
-          input,
-          taskId,
-          decision: verdict.decision,
-          taskIdEncoding: env.TASKID_ENCODING ?? "keccakModP",
-        },
-        Math.min(MAX_VERIFY_BUDGET_MS, left),
-      );
-      if (generated) {
-        proof = generated.proof;
-        publicSignals = generated.public_signals;
-        proved = { ms: generated.ms, verified: generated.verified, alternate: generated.alternate };
-      }
+  //
+  // The budget is re-read here and the answer's own reserve is subtracted, so
+  // the verification step above cannot leave the prover with time the answer
+  // still needs. requestProof decides whether a prover exists at all, so "no
+  // prover" costs nothing: no D1 read, no request, no proof.
+  let proofMs = null;
+  let proofVerified = null;
+  if (!proof) {
+    const generated = await requestProof(
+      env,
+      "gatekeeper",
+      {
+        input,
+        taskId,
+        decision: verdict.decision,
+        taskIdEncoding: env.TASKID_ENCODING ?? "keccakModP",
+      },
+      Math.min(MAX_PROOF_BUDGET_MS, deadlineBudgetMs(task) - ANSWER_RESERVE_MS),
+    );
+    if (generated) {
+      proof = generated.proof;
+      publicSignals = generated.public_signals;
+      proofMs = generated.ms ?? 0;
+      proofVerified = generated.verified;
     }
   }
 
@@ -287,8 +306,9 @@ async function handleGatekeeper(env, task, sign) {
       reason_code: response.reason_code,
       replay: isReplay,
       verification: verification.status,
-      proof: proved ? "attached" : proof ? "echoed" : "none",
-      proof_ms: proved?.ms ?? null,
+      proof: proofMs === null ? (proof ? "echoed" : "none") : "attached",
+      proof_ms: proofMs,
+      proof_verified: proofVerified,
     }),
   );
   return send(env, 200, response, sign);
@@ -344,7 +364,7 @@ export default {
     // rising `age_ms` here is the early warning; the url itself is not exposed.
     if ((request.method === "GET" || request.method === "HEAD") &&
         (url.pathname === "/health" || url.pathname === "/")) {
-      const prover = await currentProver(env).catch(() => null);
+      const prover = await currentProver(env);
       return new Response(
         JSON.stringify({
           ok: true,
