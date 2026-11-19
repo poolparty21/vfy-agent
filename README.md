@@ -133,6 +133,22 @@ D1 (not KV — the replay check needs strong consistency):
 npm test          # 87 tests, no network access required
 ```
 
+After every deploy, check it end to end:
+
+```bash
+AGENT_GAMES_HMAC_SECRET=... npm run post-deploy
+```
+
+`scripts/post-deploy-check.mjs` GETs `/health` and requires the prover to
+resolve (a fresh registration or a configured URL), then sends one signed
+Proof Gatekeeper task carrying **no proof material** so the Worker has to
+generate the proof itself. It requires a decision, a proof whose
+`public_signals` match the circuit's `nPublic`, and a proof that verifies
+against the official gatekeeper vkey exported from `circuit.zkey`. It exits
+non-zero if any check fails, and prints the D1 command to remove the row its
+probe wrote. Use `--url` for a preview/other host, `--secret-file` instead of
+the env var.
+
 Deploy (always with the **global** wrangler — a Windows-installed
 `node_modules` breaks `wrangler` on Linux):
 
@@ -141,6 +157,60 @@ Deploy (always with the **global** wrangler — a Windows-installed
 /home/unexpected/.npm-global/bin/wrangler d1 execute vfy-agent --remote --file=schema.sql
 /home/unexpected/.npm-global/bin/wrangler secret put AGENT_GAMES_HMAC_SECRET
 ```
+
+## Hosting the prover off this PC
+
+Proving needs a multi-gigabyte wasm heap and a long-lived process, so it cannot
+run in the Worker — and it stops when this machine sleeps. `Dockerfile` and
+`fly.toml` package it as one always-on 512 MB machine on Fly.io, which also
+removes the quick tunnel: the host has a stable HTTPS name, so the Worker talks
+to it through `PROVER_URL` instead of the prover registering a new hostname on
+every restart.
+
+```bash
+# once (needs a Fly account and a payment method)
+flyctl auth login
+flyctl apps create vfy-prover-missi
+```
+
+`PROVER_TOKEN` is a secret. Never put it in `fly.toml`, a Dockerfile `ENV`, the
+repo or a shell history line — import it from the gitignored file:
+
+```bash
+printf 'PROVER_TOKEN=%s\n' "$(tr -d '\n\r' < .prover-token)" \
+  | flyctl secrets import --app vfy-prover-missi
+
+flyctl deploy --app vfy-prover-missi --ha=false --vm-memory 512
+```
+
+`auto_stop_machines = false` and `min_machines_running = 1` in `fly.toml` are
+deliberate: a machine that scales to zero brings back the exact silence this
+replaces. If the circuit's wasm cannot allocate its heap at 512 MB, raise the
+size (`--vm-memory 1024`) — the boot log says so.
+
+Check it came up, then prove against it:
+
+```bash
+flyctl logs --app vfy-prover-missi          # gatekeeper: ready (nPublic 13) / warmed
+PROVER_URL=https://vfy-prover-missi.fly.dev node prover/probe.mjs
+```
+
+`prover/probe.mjs` signs a gatekeeper sample with `PROVER_TOKEN`, proves it,
+checks the reply signature and that an unsigned request is refused; it exits
+non-zero unless the proof verifies with 13 public signals.
+
+Point the Worker at it, then retire the local supervisor so nothing registers a
+new quick-tunnel hostname over the top:
+
+1. Set `PROVER_URL = "https://vfy-prover-missi.fly.dev"` in `wrangler.toml`.
+2. Redeploy the Worker (`npx --yes wrangler@4 deploy`).
+3. Stop the local `node prover/supervisor.mjs` (and its cloudflared child).
+4. `GET /health` must report `prover.source: "config"` — with the supervisor
+   gone there is no registration, so the config URL is the only source. A fresh
+   `"registration"` after this means a supervisor is still running.
+
+Answers stay correct without a prover, they simply carry no proof, so a broken
+host costs the −2 and the reliability bonus rather than failing the round.
 
 ## zkVerify
 

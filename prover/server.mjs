@@ -27,6 +27,9 @@ import * as snarkjs from "snarkjs";
 import { WitnessCalculatorBuilder } from "circom_runtime";
 
 const PORT = Number(process.env.PROVER_PORT ?? 8790);
+// 127.0.0.1 by default: on this PC the tunnel reaches the prover over loopback.
+// A container has to answer on its own interface instead (Fly: PROVER_HOST=0.0.0.0).
+const HOST = process.env.PROVER_HOST ?? "127.0.0.1";
 // fileURLToPath, not `.pathname`: the latter yields /C:/... on Windows, which
 // every fs call then fails to open (the prover would load zero circuits).
 const DIR = process.env.CIRCUITS_DIR ?? fileURLToPath(new URL("./circuits", import.meta.url));
@@ -130,8 +133,8 @@ createServer((req, res) => {
       return reply(res, 422, { error: "not provable", ms: Date.now() - t0 });
     }
   });
-}).listen(PORT, "127.0.0.1", async () => {
-  console.log(`prover on 127.0.0.1:${PORT}, circuits: ${[...circuits.keys()].join(", ") || "none"}`);
+}).listen(PORT, HOST, async () => {
+  console.log(`prover on ${HOST}:${PORT}, circuits: ${[...circuits.keys()].join(", ") || "none"}`);
   // Prove once at boot so the first real task does not pay the wasm's memory set-up.
   for (const [name, c] of circuits) {
     try {

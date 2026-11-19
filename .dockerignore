@@ -1,0 +1,16 @@
+# Secrets and local state must never enter a build context.
+.prover-token
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+.strategy-salt
+.tooling/
+.node_modules/
+**/node_modules/
+
+# Not needed to run the prover.
+.git
+.wrangler/
+test/
+*.md

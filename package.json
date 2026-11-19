@@ -11,6 +11,7 @@
     "test": "node --test",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "post-deploy": "node scripts/post-deploy-check.mjs",
     "d1:create": "wrangler d1 create vfy-agent",
     "d1:apply": "wrangler d1 execute vfy-agent --remote --file=schema.sql",
     "secret": "wrangler secret put AGENT_GAMES_HMAC_SECRET"

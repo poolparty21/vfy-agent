@@ -1,0 +1,38 @@
+# Always-on prover. Deploy with:
+#   fly deploy --ha=false --vm-memory 512
+# and set the shared secret once with:
+#   fly secrets set PROVER_TOKEN=...        (from .prover-token, never committed)
+app = "vfy-prover-missi"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PROVER_HOST = "0.0.0.0"
+  PROVER_PORT = "8080"
+
+# A machine that scales to zero would reintroduce exactly the failure this
+# replaces: no prover while nobody is looking. Keep one machine up, always.
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 10
+    hard_limit = 25
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
