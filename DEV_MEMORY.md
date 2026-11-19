@@ -2,6 +2,76 @@
 
 > Session log, newest first. Project contract: `AGENTS.md`. Workspace log: `C:\mnt\www\DEV_MEMORY.md`.
 
+### 2026-11-19 — Always-on prover: a container for Fly, **built but NOT deployed**
+
+**The failure this is meant to end.** Every proof we fail to attach costs **−2
+and the reliability bonus**, and the only reason we ever fail to attach one is
+that the prover is a process on this PC reached through a Cloudflare **quick
+tunnel**. A reboot, a sleep, a closed lid or a tunnel rename takes the prover
+away while the Worker keeps answering correctly — the loss is silent in the
+scores and visible only in the logs. The 2026-11-18 fix made the tunnel
+self-heal (liveness probe in `prover/supervisor.mjs`); it does nothing if the
+machine itself is off. A host that does not sleep is the only real fix.
+
+**What shipped in this repo** (all committed):
+
+| file | what it is |
+|---|---|
+| `Dockerfile` | the prover as a container: `node:22-slim`, `npm ci --omit=dev` from `prover/package-lock.json`, then `server.mjs`, `maps/`, `circuits/`, `src/vfy.js` — the **repo layout is preserved** because `prover/maps/gatekeeper.mjs` imports `../../src/vfy.js` for `keccak256` |
+| `fly.toml` | `app = "vfy-prover-missi"`, region `sin`, `internal_port = 8080`, `min_machines_running = 1` with `auto_stop_machines = false` — a scale-to-zero machine would reintroduce exactly this bug — plus a `GET /health` check every 30 s and `shared-cpu-1x` / 512 MB |
+| `prover/server.mjs` | `PROVER_HOST` (default `127.0.0.1`): loopback is right behind the tunnel, but a container must bind `0.0.0.0` |
+| `.dockerignore` | `.prover-token`, `.env*`, `.dev.vars*`, `.strategy-salt`, `.tooling/`, `node_modules`, `.git`, `.wrangler`, `test/`, `*.md` — **the token is never baked into an image**; it arrives at runtime via `fly secrets set PROVER_TOKEN=…` |
+| `prover/probe.mjs` | `PROVER_URL=https://vfy-prover-missi.fly.dev node prover/probe.mjs` is already the documented smoke test for a fixed host |
+
+No cloudflared in the image on purpose: the host terminates TLS and gives a
+stable HTTPS name, so the Worker can be pointed at `https://<app>.fly.dev`
+with `PROVER_URL` instead of a hostname that renames itself on every restart.
+
+**⛔ NOT deployed, and do not describe it as running.** `flyctl` is not even
+installed on this PC, `flyctl auth whoami` had no access token, and Fly needs
+an account with a payment method — that is an owner login, so it was left
+alone. Today the prover is still **this PC + quick tunnel + supervisor**. Until
+someone runs the two commands at the top of `fly.toml` (`fly deploy --ha=false
+--vm-memory 512`, `fly secrets set PROVER_TOKEN=…`), the file is a plan that
+happens to be one command away.
+
+**The traps that will bite whoever finishes the migration** — all four are easy
+to miss and each one silently costs points:
+
+1. **A fresh registration beats `PROVER_URL`.** `src/prover.js` prefers the D1
+   `prover` row from `POST /prover/register`, and the PC supervisor registers
+   every 2 minutes. Leave it running and the Worker keeps sending proofs to
+   the PC while Fly sits idle — the migration would *look* done and change
+   nothing. Stop `prover/supervisor.mjs` (and its cloudflared) **before** the
+   first scored round on Fly, or move the registration to the container.
+2. **The token must be byte-identical on both sides.** `fly secrets set
+   PROVER_TOKEN=…` and the Worker's `wrangler secret put PROVER_TOKEN` take the
+   same value from `.prover-token`; a mismatch is a silent `null` from
+   `requestProof` (it never throws) and a `−2` on every task, with nothing in
+   the response to show it.
+3. **The circuits are gitignored binaries.** `fly deploy` reads the local build
+   context, so this PC works; a fresh clone has no `circuit.wasm` /
+   `circuit.zkey` and the image boots with **zero circuits** (it still starts —
+   the log line just reads `circuits: none`, and `/health` still answers 200, a
+   green health check that proves nothing). Verify `circuits` in `/health` and re-probe after the
+   first deploy.
+4. **512 MB may be too small.** The Windows host needed multi-gigabyte wasm
+   memory before the calculator was cached; Linux is usually far cheaper, but
+   this is unmeasured on Fly. If the first prove is refused/OOM, raise
+   `[[vm]] memory` rather than debugging the circuit.
+
+**Verify it the same way the tunnel was verified** (non-negotiable before
+trusting it): `curl https://vfy-prover-missi.fly.dev/health` → 200 with
+`circuits: ["gatekeeper"]`, then `PROVER_URL=https://vfy-prover-missi.fly.dev
+node prover/probe.mjs` → `verified: true`, 13 signals, `replySigOk true`, and
+an unsigned request still 401. A 200 on `/health` alone is not enough — it is
+unsigned and says nothing about proving.
+
+**Interacts with:** `7a6c917` (proof budget vs answer window), the 2026-11-18
+self-registration note below, and the still-uncommitted supervisor liveness
+patch, which is the stopgap this container is meant to replace — not something
+to build on.
+
 ### 2026-11-18 — Prover review: proof time can no longer eat the answer window
 
 **Scope of `7a6c917`.** A review pass over the prover that `1f28378` landed:

@@ -29,6 +29,8 @@ const CIRCUITS = (process.env.PROVER_CIRCUITS ?? "gatekeeper").split(",").map((s
 const CLOUDFLARED =
   process.env.CLOUDFLARED ?? join(ROOT, ".tooling", "bin", process.platform === "win32" ? "cloudflared.exe" : "cloudflared");
 const HEARTBEAT_MS = 2 * 60_000;
+const LIVENESS_TIMEOUT_MS = 15_000;
+const DEAD_BEATS_BEFORE_RESTART = 2;
 const URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
 
 const TOKEN = (process.env.PROVER_TOKEN ?? (existsSync(join(ROOT, ".prover-token")) ? readFileSync(join(ROOT, ".prover-token"), "utf8") : "")).trim();
@@ -43,6 +45,8 @@ if (!existsSync(CLOUDFLARED)) {
 
 const stamp = () => new Date().toISOString();
 let currentUrl = null;
+let tunnel = null;
+let deadBeats = 0;
 
 /** POST the current url to the Worker. Never throws: a failed beat is a warning. */
 async function register(reason) {
@@ -89,9 +93,34 @@ function startTunnel() {
   child.on("exit", (code) => {
     console.warn(`${stamp()} tunnel exited (${code}); restarting in 5s`);
     currentUrl = null;
+    deadBeats = 0;
+    if (tunnel === child) tunnel = null;
     setTimeout(startTunnel, 5000);
   });
+  tunnel = child;
   return child;
+}
+
+/**
+ * Does the tunnel's public hostname still answer?
+ *
+ * A quick tunnel can lose its hostname while cloudflared itself stays alive:
+ * Cloudflare withdraws the DNS record but the process never exits, so nothing
+ * is restarted and this supervisor would keep re-registering a dead url
+ * forever. Every prove request then fails and every provable task is answered
+ * without a proof (-2 each), with nothing in the logs to show it.
+ *
+ * So the heartbeat asks the url from outside. After two consecutive failures
+ * the tunnel is killed, which mints a new hostname that re-registers itself.
+ */
+async function tunnelAlive() {
+  if (!currentUrl) return true; // still starting: not dead, just not born yet
+  try {
+    const res = await fetch(`${currentUrl}/health`, { signal: AbortSignal.timeout(LIVENESS_TIMEOUT_MS) });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 function startProver() {
@@ -111,8 +140,23 @@ function startProver() {
 const children = [startProver(), startTunnel()];
 
 // Heartbeat: keeps the registration fresh while the tunnel keeps the same url,
-// so the Worker never falls back to a stale PROVER_URL (or to nothing).
-setInterval(() => register("heartbeat"), HEARTBEAT_MS);
+// so the Worker never falls back to a stale PROVER_URL (or to nothing) — and
+// checks that the registered url still answers, so a revoked hostname is
+// replaced instead of re-registered.
+setInterval(async () => {
+  await register("heartbeat");
+  if (await tunnelAlive()) {
+    deadBeats = 0;
+    return;
+  }
+  deadBeats += 1;
+  console.warn(`${stamp()} registered url ${currentUrl} is not answering (${deadBeats}/${DEAD_BEATS_BEFORE_RESTART})`);
+  if (deadBeats >= DEAD_BEATS_BEFORE_RESTART) {
+    deadBeats = 0;
+    console.warn(`${stamp()} restarting the tunnel to mint a fresh hostname`);
+    tunnel?.kill();
+  }
+}, HEARTBEAT_MS);
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
