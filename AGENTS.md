@@ -125,8 +125,12 @@ secret to its agentKey and to the D1 rows):
 - gatekeeper vkHash `0x6b79c6012a6d8651f3e13bc4d2a20370280ab49700c90c5316d4168bfbad77b0`
 - vfyPolicy vkHash `0x6c56509f1c56fd1fd4e9737f906d2220f4b95f1d507f1adf6899085bd74be047`
 
-From the zkeys: gatekeeper has **12 public inputs**, vfy-policy has **8** — and
-our `publicInputsHash` covers exactly **eight** words, so its shape is right.
+From the zkeys' headers: gatekeeper `nPublic` **13**, vfy-policy `nPublic` **9**.
+`nPublic` counts the public SIGNALS (the output included) — our live gatekeeper
+proofs return exactly 13, so it is one signal per `nPublic`. vfy-policy's `[0]`
+is the circuit's digest output, which only the witness calculator can produce,
+so signals must come from the prover verbatim. `publicInputsHash` is a separate,
+**optional** 8-word audit field and is not the signal array.
 
 The circuits' real input signal names (they are NOT strings in the wasm —
 circom hashes them with FNV-1a-64, so recover them by probing

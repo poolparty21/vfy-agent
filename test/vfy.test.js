@@ -210,7 +210,7 @@ test("the fallback turn response is schema-valid HOLD", () => {
   assert.match(res.idempotencyKey, /^[0-9a-f-]{36}$/);
 });
 
-test("the turn response carries protocolVersion, public signals and the hash", () => {
+test("the turn response carries protocolVersion and the hash, but no invented proof", () => {
   // The platform's response-schema check rejected a response without these.
   const res = buildTurnResponse({
     protocolVersion: "v1",
@@ -225,16 +225,31 @@ test("the turn response carries protocolVersion, public signals and the hash", (
   assert.equal(res.turn, 3);
   assert.equal(res.policyProof.circuitVersion, "v1-draft");
   assert.match(res.policyProof.publicInputsHash, /^0x[0-9a-f]{64}$/);
-  assert.ok(Array.isArray(res.policyProof.public_signals), "public_signals must be present");
-  assert.equal(res.policyProof.public_signals.length, 8);
-  // The signals must be the same values the hash covers, in the same order.
-  assert.equal(
-    res.policyProof.public_signals[1],
-    BigInt("0x9f4e1b2ac53d4b219f8a1234567890ab").toString(),
+  // A response with no proof must not carry a hand-built signal array either.
+  // vfy-policy has nPublic 9 (signal [0] is the circuit's digest output); the
+  // eight-word array this used to ship could never verify against it.
+  assert.equal(res.policyProof.proof, undefined);
+  assert.equal(res.policyProof.public_signals, undefined);
+});
+
+test("a prover's proof and signals are attached verbatim", () => {
+  const proof = { pi_a: ["1", "2", "1"], pi_b: [["1", "2"], ["3", "4"], ["1", "0"]], pi_c: ["5", "6", "1"], protocol: "groth16", curve: "bn128" };
+  const public_signals = ["111", "222", "333", "1", "95", "105", "2", "10", "1"];
+  const res = buildTurnResponse(
+    {
+      matchId: "9f4e1b2a-c53d-4b21-9f8a-1234567890ab",
+      turn: 3,
+      state: { selfBalance: "95", opponentBalance: "105" },
+      strategyCommitment: { hash: "0x" + "11".repeat(32) },
+      resolverVersion: "v1",
+    },
+    new Date(),
+    undefined,
+    { proof, public_signals },
   );
-  assert.equal(res.policyProof.public_signals[3], "95");
-  assert.equal(res.policyProof.public_signals[4], "105");
-  assert.equal(res.policyProof.public_signals[5], "2", "EXTRACT is action code 2");
+  assert.deepEqual(res.policyProof.proof, proof);
+  assert.deepEqual(res.policyProof.public_signals, public_signals);
+  assert.equal(res.policyProof.circuitVersion, "v1");
 });
 
 test("the idempotency key is derived from the real digest bytes", () => {

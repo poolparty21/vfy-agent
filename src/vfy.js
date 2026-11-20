@@ -163,45 +163,19 @@ export function publicInputsHash({
   return keccak256(buf);
 }
 
-/**
- * The circuit's public signals, in the same order the public-inputs hash uses.
+/*
+ * WHY THERE IS NO buildPublicSignals() ANY MORE (removed 2026-11-20)
  *
- * The build guide's hash is keccak256 over eight ABI-packed 32-byte words in
- * a fixed order; those eight values ARE the circuit's public inputs, so the
- * signal array mirrors them exactly. The platform "independently computes
- * this hash from the game state it knows and rejects any proof where the hashes
- * diverge", so the two must agree.
+ * The eight words publicInputsHash packs are NOT the circuit's public signals.
+ * The published vfy-policy zkey has nVars 1909 / nPublic 9, and snarkjs returns
+ * one public signal per nPublic (the gatekeeper control is nPublic 13 and its
+ * real proofs carry exactly 13). vfy-policy's first signal is the circuit's own
+ * digest OUTPUT, which only the witness calculator can produce.
  *
- * @returns {string[]|null} decimal strings, or null when a value is missing
+ * So a hand-built array could never verify: eight entries, no digest, and the
+ * guide fails any turn whose signals are not "the circuit's output-then-public
+ * order". Signals now come from the prover verbatim, or not at all.
  */
-export function buildPublicSignals({
-  commitment,
-  matchId,
-  turn,
-  selfBalance,
-  opponentBalance,
-  action,
-  circuitVersion,
-}) {
-  const versionCode = CIRCUIT_VERSION_CODE[circuitVersion];
-  if (versionCode === undefined) return null;
-  const commitmentWord = commitment === undefined ? undefined : matchIdWord(commitment);
-  if (commitmentWord === undefined) return null;
-  try {
-    return [
-      commitmentWord.toString(),
-      matchIdWord(matchId).toString(),
-      toBig(turn).toString(),
-      toBig(selfBalance).toString(),
-      toBig(opponentBalance).toString(),
-      ACTION_CODE[action.type].toString(),
-      (action.type === "EXTRACT" ? toBig(action.amount) : 0n).toString(),
-      versionCode.toString(),
-    ];
-  } catch {
-    return null;
-  }
-}
 
 /**
  * The 32-byte word for a match id.
@@ -267,8 +241,10 @@ export function chooseAction(state, policy = POLICY) {
  * @param {object} env  the turn envelope from the platform
  * @param {Date} now
  * @param {string} [registeredCommitment] used when the envelope omits it
+ * @param {{proof: object, public_signals: string[]}|null} [proofMaterial]
+ *        the prover's Groth16 proof for THIS turn, attached verbatim
  */
-export function buildTurnResponse(env, now = new Date(), registeredCommitment) {
+export function buildTurnResponse(env, now = new Date(), registeredCommitment, proofMaterial = null) {
   const action = chooseAction(env.state);
   // Echo the envelope's version VERBATIM. The platform rejects a response that
   // uses a different circuit version, so answering "v1-draft" to a "v1"
@@ -291,37 +267,20 @@ export function buildTurnResponse(env, now = new Date(), registeredCommitment) {
     });
   }
 
-  // The platform's response-schema check requires the policy proof itself:
   // "attach your policy proof (circuitVersion plus the Groth16 proof and
-  // public_signals)". A Groth16 proof is only producible once the platform
-  // publishes the circuit artifacts (.zkey / .wasm), which it has not yet.
+  // public_signals)" — the proof and its signals are required TOGETHER, and
+  // both must sit inside policyProof.
   //
-  // Until then we still declare the field so the response is schema-shaped,
-  // and we publish the public inputs the circuit would consume. The platform
-  // treats a missing or mismatched required field as HOLD with no proof, so
-  // declaring the shape honestly is strictly better than omitting it.
-  const publicSignals = buildPublicSignals({
-    commitment,
-    matchId: env.matchId,
-    turn: env.turn,
-    selfBalance: env.state?.selfBalance,
-    opponentBalance: env.state?.opponentBalance,
-    action,
-    circuitVersion,
-  });
-  if (publicSignals) policyProof.public_signals = publicSignals;
-
-  // The Groth16 proof itself. It can only be produced once the platform
-  // publishes the circuit artifacts (.zkey / .wasm) — "Circuit artifacts are
-  // being prepared — check back before the first scored round opens" — and it
-  // must be generated with the REGISTERED key. When no prover is available
-  // the field is left out rather than faked: the platform treats a missing
-  // required field as HOLD with no proof, and a fabricated proof would be
-  // worse (an invalid proof, not an absent one).
-  const proof = env.policyProof?.proof ?? env.proof;
-  if (proof) policyProof.proof = proof;
-  // The Groth16 proof and public_signals go here once the platform publishes
-  // the policy circuit (.wasm / .zkey).
+  // They are copied from the prover exactly as it returned them. Rebuilding
+  // them here is impossible: signal [0] is the circuit's digest output, and the
+  // platform verifies the array against its own witness computation. A turn we
+  // cannot prove goes out WITHOUT the pair — the platform resolves it as HOLD
+  // with an invalid proof (−2), and a fabricated proof is the same −2 plus a
+  // lie that hides the real failure.
+  if (proofMaterial?.proof && Array.isArray(proofMaterial.public_signals)) {
+    policyProof.proof = proofMaterial.proof;
+    policyProof.public_signals = proofMaterial.public_signals;
+  }
   return {
     protocolVersion: env.protocolVersion ?? "v1",
     matchId: env.matchId,

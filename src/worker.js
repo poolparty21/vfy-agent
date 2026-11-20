@@ -331,6 +331,14 @@ async function handleVfyTurn(env, task, sign) {
   // Building the response must never be able to lose the turn: a missing or
   // invalid response is scored as a HOLD with a reliability penalty, but a
   // thrown error is a delivery timeout — strictly worse.
+  //
+  // Why no proof is requested here: the vfy-policy circuit derives the
+  // commitment as Poseidon(strategyParams[0..7], salt), and the commitment the
+  // platform froze at pairing for this agent is a keccak256 value. The witness
+  // cannot exist, so fullProve can only fail — every turn of the 13–17 Nov
+  // Swiss stage went out unproved and scored −2. Nothing in the Worker can fix
+  // that; the fix is registering a Poseidon-derived commitment on the dashboard
+  // before pairing. See DEV_MEMORY (2026-11-20).
   let response;
   try {
     response = buildTurnResponse(task, new Date(), env.STRATEGY_COMMITMENT);
@@ -347,7 +355,16 @@ async function handleVfyTurn(env, task, sign) {
     response: JSON.stringify(response),
   });
   console.log(
-    JSON.stringify({ event: "steal-the-vfy", agentKey, matchId, turn, action: response.action }),
+    JSON.stringify({
+      event: "steal-the-vfy",
+      agentKey,
+      matchId,
+      turn,
+      action: response.action,
+      // "none" is not silent any more: an unproved turn is −2, and that is the
+      // failure this project kept missing in its own logs.
+      proof: response.policyProof?.proof ? "attached" : "none",
+    }),
   );
   return send(env, 200, response, sign);
 }
