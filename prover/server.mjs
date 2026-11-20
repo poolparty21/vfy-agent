@@ -18,6 +18,13 @@
 // tunnel in front of this can be public without the prover being open.
 //
 //   PROVER_TOKEN=... node server.mjs      (listens on 127.0.0.1:8790)
+//
+// SELF-REGISTRATION. The Worker prefers a FRESH registration over PROVER_URL,
+// which is what makes a quick tunnel survivable — and it also means a container
+// that only sets PROVER_URL is a no-op while any PC supervisor is running: that
+// supervisor's heartbeat keeps winning. So with PROVER_PUBLIC_URL set (Fly:
+// https://<app>.fly.dev) this process announces itself with the same signed
+// POST /prover/register the supervisor uses, at boot and every 2 minutes.
 import { createServer } from "node:http";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -38,6 +45,11 @@ if (!TOKEN) {
   console.error("PROVER_TOKEN is required (the Worker signs every request with it).");
   process.exit(1);
 }
+// Empty on this PC: the supervisor owns registration there. Set in a container.
+const PUBLIC_URL = String(process.env.PROVER_PUBLIC_URL ?? "").trim().replace(/\/+$/, "");
+const WORKER_URL = String(process.env.WORKER_URL ?? "https://vfy-agent.hallo-alexa.workers.dev").trim().replace(/\/+$/, "");
+// Same cadence as the supervisor; the Worker ignores a row older than 10 min.
+const REGISTER_MS = Number(process.env.PROVER_REGISTER_MS ?? 2 * 60_000);
 
 const sign = (buf) => createHmac("sha256", TOKEN).update(buf).digest("hex");
 const ok = (given, raw) => {
@@ -94,6 +106,33 @@ function reply(res, status, obj) {
   res.end(body);
 }
 
+/**
+ * Tell the Worker where this prover is: HMAC over the raw body, timestamped so
+ * a replayed POST cannot resurrect an old url. Never throws — a failed beat
+ * retries on the next one instead of taking the prover down.
+ */
+async function register() {
+  if (!PUBLIC_URL) return;
+  // A prover that loaded no circuit can prove nothing. Registering anyway would
+  // hand the Worker a url that answers every prove with 404 — the same silent
+  // -2 the registration exists to prevent, just from the other side.
+  if (circuits.size === 0) {
+    console.warn("register: no circuits loaded, not advertising a prover that cannot prove");
+    return;
+  }
+  const body = Buffer.from(JSON.stringify({ url: PUBLIC_URL, circuits: [...circuits.keys()], ts: Date.now() }));
+  try {
+    const res = await fetch(`${WORKER_URL}/prover/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-prover-signature": sign(body) },
+      body,
+    });
+    console.log(`register ${PUBLIC_URL} -> ${res.status} ${(await res.text()).slice(0, 200)}`);
+  } catch (err) {
+    console.warn(`register failed: ${err?.message}`);
+  }
+}
+
 createServer((req, res) => {
   const chunks = [];
   req.on("data", (c) => chunks.push(c));
@@ -135,6 +174,9 @@ createServer((req, res) => {
   });
 }).listen(PORT, HOST, async () => {
   console.log(`prover on ${HOST}:${PORT}, circuits: ${[...circuits.keys()].join(", ") || "none"}`);
+  // Before the warm-up: the Worker should learn this url as early as possible.
+  await register();
+  if (PUBLIC_URL) setInterval(register, REGISTER_MS);
   // Prove once at boot so the first real task does not pay the wasm's memory set-up.
   for (const [name, c] of circuits) {
     try {

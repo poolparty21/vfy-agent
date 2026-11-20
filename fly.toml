@@ -11,6 +11,11 @@ primary_region = "sin"
 [env]
   PROVER_HOST = "0.0.0.0"
   PROVER_PORT = "8080"
+  # The prover announces this url to the Worker itself (signed POST
+  # /prover/register, at boot and every 2 min). PROVER_URL alone loses: the
+  # Worker prefers any FRESH registration, so a PC supervisor beats it.
+  PROVER_PUBLIC_URL = "https://vfy-prover-missi.fly.dev"
+  WORKER_URL = "https://vfy-agent.hallo-alexa.workers.dev"
 
 # A machine that scales to zero would reintroduce exactly the failure this
 # replaces: no prover while nobody is looking. Keep one machine up, always.

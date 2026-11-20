@@ -5,8 +5,10 @@
 #   /app/prover/server.mjs   /app/prover/circuits/...   /app/src/vfy.js
 #
 # No cloudflared here: the host terminates TLS and gives a stable HTTPS name,
-# so the Worker is pointed at https://<app>.fly.dev with PROVER_URL instead of
-# a quick tunnel that renames itself on every restart.
+# and the process REGISTERS that name itself (PROVER_PUBLIC_URL, signed POST
+# /prover/register, boot + every 2 min). PROVER_URL alone is not enough: the
+# Worker prefers a fresh registration, so a running PC supervisor would keep
+# winning and the container would never be used.
 FROM node:22-slim
 
 ENV NODE_ENV=production \
