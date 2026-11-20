@@ -92,9 +92,10 @@ function startTunnel() {
   watchTunnelLogs(child.stderr);
   child.on("exit", (code) => {
     console.warn(`${stamp()} tunnel exited (${code}); restarting in 5s`);
+    // currentUrl = null is also the dead-beat reset: no url means the next beat
+    // cannot judge liveness and starts the streak clean.
     currentUrl = null;
-    deadBeats = 0;
-    if (tunnel === child) tunnel = null;
+    tunnel = null;
     setTimeout(startTunnel, 5000);
   });
   tunnel = child;
@@ -102,19 +103,13 @@ function startTunnel() {
 }
 
 /**
- * Does the tunnel's public hostname still answer?
+ * Does the registered url still answer from outside?
  *
- * A quick tunnel can lose its hostname while cloudflared itself stays alive:
- * Cloudflare withdraws the DNS record but the process never exits, so nothing
- * is restarted and this supervisor would keep re-registering a dead url
- * forever. Every prove request then fails and every provable task is answered
- * without a proof (-2 each), with nothing in the logs to show it.
- *
- * So the heartbeat asks the url from outside. After two consecutive failures
- * the tunnel is killed, which mints a new hostname that re-registers itself.
+ * A quick tunnel can lose its hostname while cloudflared keeps running: the
+ * process never exits, nothing restarts, and we would keep re-registering a
+ * dead url — every prove request failing, silently, at -2 a task.
  */
-async function tunnelAlive() {
-  if (!currentUrl) return true; // still starting: not dead, just not born yet
+async function answers() {
   try {
     const res = await fetch(`${currentUrl}/health`, { signal: AbortSignal.timeout(LIVENESS_TIMEOUT_MS) });
     return res.ok;
@@ -139,24 +134,32 @@ function startProver() {
 
 const children = [startProver(), startTunnel()];
 
-// Heartbeat: keeps the registration fresh while the tunnel keeps the same url,
-// so the Worker never falls back to a stale PROVER_URL (or to nothing) — and
-// checks that the registered url still answers, so a revoked hostname is
-// replaced instead of re-registered.
-setInterval(async () => {
+// Heartbeat: re-register the url (so the Worker never falls back to a stale
+// PROVER_URL) and check it still answers (so a revoked hostname is replaced
+// instead of re-registered).
+//
+// Two consecutive beats must fail before the tunnel is killed: a beat is 2
+// minutes, so a brief blip costs one beat at most, while a genuinely dead url
+// is replaced after ~4 minutes. Erring eager here is cheap — the replacement
+// re-registers itself in seconds — but erring late costs 2 points a task.
+async function beat() {
   await register("heartbeat");
-  if (await tunnelAlive()) {
+  // No url yet: the tunnel is starting, which is not a failure.
+  if (!currentUrl || (await answers())) {
     deadBeats = 0;
     return;
   }
   deadBeats += 1;
-  console.warn(`${stamp()} registered url ${currentUrl} is not answering (${deadBeats}/${DEAD_BEATS_BEFORE_RESTART})`);
-  if (deadBeats >= DEAD_BEATS_BEFORE_RESTART) {
-    deadBeats = 0;
-    console.warn(`${stamp()} restarting the tunnel to mint a fresh hostname`);
-    tunnel?.kill();
+  if (deadBeats < DEAD_BEATS_BEFORE_RESTART) {
+    console.warn(`${stamp()} ${currentUrl}/health failed (${deadBeats}/${DEAD_BEATS_BEFORE_RESTART}); keeping the tunnel`);
+    return;
   }
-}, HEARTBEAT_MS);
+  deadBeats = 0;
+  console.warn(`${stamp()} registered url dead for ${DEAD_BEATS_BEFORE_RESTART} beats; minting a new hostname`);
+  tunnel?.kill();
+}
+
+setInterval(beat, HEARTBEAT_MS);
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {

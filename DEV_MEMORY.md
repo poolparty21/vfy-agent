@@ -2,6 +2,100 @@
 
 > Session log, newest first. Project contract: `AGENTS.md`. Workspace log: `C:\mnt\www\DEV_MEMORY.md`.
 
+### 2026-11-20 — jimmygreen's −167: the silence is the event ending, the loss is unproved turns
+
+**Asked:** why −167 in Steal the VFY, and no turn since 17 Nov — is the handler
+still answering?
+
+**The silence is not a bug.** The event page now reads *Schedule 13 Nov – 17
+Nov 2026*, `NO LIVE MATCHES`, and the build guide's Swiss stage is complete.
+D1 agrees: `vfy_turns` holds **124 competition turns over 7 matches, 5 days,
+last at `2026-11-17T13:35:47Z`** (`agent_key 96218151c607b016`). Nothing was
+refused after that date — there was nothing left to play. We are not in the
+top-16 knockout, so VFY is over for this agent and **−167 is final**.
+
+**The loss is per-turn invalidity, exactly as the 2026-11-18 entry predicted.**
+Score model: win +18, draw +9, loss +3, timeout −1/turn, **invalid policy proof
+−2/turn**. 124 × −2 = −248 against at most 7 × 3 = +21 of match points, i.e.
+the −167 shape only makes sense as "punished on every turn". The stored
+envelopes confirm the platform substituted HOLD: 83 of the 124 turns arrive with
+`selfBalance`/`opponentBalance` still `100/100`, and the last four turns of the
+last match are turn 17, 18, 19, 20 all reading `100/100` — our EXTRACT never
+landed once. Leaderboard context: 28 agents finished VFY positive, 25 negative.
+
+**Is the handler answering *correctly*? It was schema-correct and score-invalid.**
+Replayed a real stored envelope through it: matchId/turn echo ✔, `EXTRACT 10`
+with no `amount` on non-EXTRACT ✔, version echoed verbatim ✔, signature ✔ —
+but `policyProof` never contained `proof` nor `public_signals`.
+
+**Why no proof was ever possible:** the commitment the platform froze at pairing
+is `0xf5a9f63b…14e1e2` = our `keccak256(W ‖ R)`, while the circuit derives
+`commitment = Poseidon(strategyParams[0..7], salt)`. Poseidon is not invertible,
+so **no witness existed** and `fullProve` could only fail. No Worker change can
+alter that; only a Poseidon-derived commitment registered on the dashboard
+**before pairing** can.
+
+#### The real code defect found today
+
+The handler hand-built `policyProof.public_signals` as **eight** values (the
+same words `publicInputsHash` packs). The circuit does not have eight public
+signals. Reading the published zkeys' headers directly:
+
+| zkey | nVars | nPublic | cross-check |
+|---|---|---|---|
+| `gatekeeper_final.zkey` | 647 | **13** | our live gatekeeper proofs return exactly 13 signals ✔ |
+| `vfy-policy_final.zkey` | 1909 | **9** | we were shipping 8 ✘ |
+
+So `snarkjs` returns one public signal per `nPublic` (output included), and
+vfy-policy's `[0]` is the circuit's **digest output** — only the witness
+calculator can produce it. Our array could never match, and the guide fails any
+turn whose signals are not "the circuit's output-then-public order".
+
+**Shipped:**
+
+- `src/vfy.js` — `buildPublicSignals()` **deleted**. `buildTurnResponse()` takes
+  an optional `proofMaterial` and copies `proof` + `public_signals` from the
+  prover **verbatim**; with no proof it sends neither, instead of inventing a
+  shape that cannot verify.
+- `src/worker.js` — the VFY log line now says `proof: "attached" | "none"`, so a
+  −2 turn is visible in our own logs; a comment records why no prover is called
+  for VFY (the frozen keccak commitment).
+- `test/vfy.test.js` — the old "8 signals must be present" assertion replaced by
+  "no invented proof" + "a prover's proof and signals are attached verbatim".
+  **117 tests pass.**
+
+Not deployed: the Worker still runs the previous bundle, and the change affects
+only the VFY path (no live VFY). Deploy before any future VFY pairing.
+
+#### The Fly container now registers itself (same day)
+
+**The trap:** the Worker prefers a FRESH registration over `PROVER_URL`
+(`src/prover.js`: `currentProver`), which is what makes a quick tunnel
+survivable — and it also means a container configured only with `PROVER_URL` is
+a **no-op while the PC supervisor runs**, because that supervisor's 2-minute
+heartbeat keeps overwriting the row with a laptop-tunnel url that dies when the
+machine sleeps.
+
+**Fix:** `prover/server.mjs` announces itself when `PROVER_PUBLIC_URL` is set
+(Fly: `https://vfy-prover-missi.fly.dev`, now in `fly.toml` `[env]`): the same
+signed `POST /prover/register` the supervisor uses — HMAC-SHA256 hex of the raw
+body in `x-prover-signature`, `{ url, circuits, ts: Date.now() }`, at boot and
+every `PROVER_REGISTER_MS` (default 2 min, matching the 10-minute staleness
+cutoff). Unset on this PC, where the supervisor owns registration.
+
+One guard that matters: **it will not register with zero circuits loaded.** A
+prover that cannot prove would otherwise win the registration and answer every
+`/prove` with 404 — the identical silent −2, just from the other side.
+
+⚠️ Two provers must never heartbeat at once: last write wins, every 2 minutes,
+so `fly deploy` while the PC supervisor is up just flips the Worker between
+them. Stop the local supervisor (and its scheduled task) before relying on Fly.
+
+**Open, owner-only:** registering a Poseidon commitment for `jimmygreen` —
+Dashboard → My Agents → Edit → Steal the VFY section — before the next pairing.
+Building a vfy-policy prover map (17 inputs, Poseidon) without that commitment
+would prove nothing.
+
 ### 2026-11-19 — Always-on prover: a container for Fly, **built but NOT deployed**
 
 **The failure this is meant to end.** Every proof we fail to attach costs **−2
