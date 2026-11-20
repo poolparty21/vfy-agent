@@ -87,9 +87,31 @@ One guard that matters: **it will not register with zero circuits loaded.** A
 prover that cannot prove would otherwise win the registration and answer every
 `/prove` with 404 — the identical silent −2, just from the other side.
 
-⚠️ Two provers must never heartbeat at once: last write wins, every 2 minutes,
-so `fly deploy` while the PC supervisor is up just flips the Worker between
-them. Stop the local supervisor (and its scheduled task) before relying on Fly.
+**Two provers may now heartbeat at once (same day, later).** They used to
+collide: one `prover` row, last write wins every 2 minutes, so the Worker
+flipped between a laptop tunnel and the container. `saveProver` now writes one
+row per url into `provers` (`schema.sql`, additive migration copied the old
+row), and `currentProver` resolves deterministically: fresh rows only, then a
+**stable host beats a quick tunnel**, then registration over `PROVER_URL`, then
+the newest, then the url. The quick-tunnel case is unchanged — a tunnel that is
+the only fresh prover is still chosen. `/health` now reports `kind:
+"stable" | "tunnel"` so the winner is visible.
+
+**The deploy no longer leaves a hole (same day, later).** The live Worker reads
+the old `prover` table, so switching to `provers` alone would have started with
+nothing there: the supervisor's next heartbeat is up to two minutes away and
+`PROVER_URL` is empty on purpose, i.e. every task in that window goes unproved
+(−2 each). `currentProver` now reads the legacy row **only when `provers` holds
+no fresh row**, under the same 10-minute freshness rule, and marks it
+`legacy: true` (`/health` reports `legacy`). The first heartbeat into `provers`
+ends the fallback for good; on a database created from the current `schema.sql`
+the `prover` table does not exist and the failed lookup is ignored silently
+(only a non-`no such table` error is logged). 125 tests pass, including a
+legacy fallback, a fresh-`provers`-wins, a stale-legacy and a missing-table case.
+
+The migration copy in `schema.sql` (`INSERT OR IGNORE … SELECT … FROM prover`)
+seeds a row that expires ten minutes after it was copied — expected: it is a
+best-effort carry-over, and the fallback above is what actually covers the gap.
 
 **Open, owner-only:** registering a Poseidon commitment for `jimmygreen` —
 Dashboard → My Agents → Edit → Steal the VFY section — before the next pairing.

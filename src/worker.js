@@ -387,7 +387,7 @@ export default {
           ok: true,
           agent: "vfy-agent",
           prover: prover
-            ? { source: prover.source, age_ms: prover.ageMs ?? null, circuits: prover.circuits }
+            ? { source: prover.source, kind: prover.kind, legacy: prover.legacy ?? false, age_ms: prover.ageMs ?? null, circuits: prover.circuits }
             : null,
         }),
         { status: 200, headers: { "content-type": "application/json" } },

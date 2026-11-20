@@ -6,6 +6,16 @@
 // accepted, a replayed registration is refused, and — the point of the whole
 // thing — a FRESH registration beats PROVER_URL while a STALE one does not.
 //
+// Registrations are kept one per url, because two provers can heartbeat at
+// once (a PC quick tunnel and the Fly container). When both are fresh the
+// choice must be deterministic and must prefer the stable host, or the Worker
+// flips between them every two minutes.
+//
+// The retired single-row `prover` table is still read when `provers` holds
+// nothing fresh: the deploy that introduces `provers` would otherwise leave a
+// window of up to two minutes where the (still heartbeating) prover is
+// invisible and every answer goes out unproved.
+//
 // The second half drives requestProof itself against a mocked fetch, so a
 // registration that is stored but never actually used cannot pass: the request
 // must go to the registered url, carry exactly {circuit, payload}, be signed
@@ -23,26 +33,29 @@ const NEW_URL = "https://brand-new-tunnel.trycloudflare.com";
 const OLD_URL = "https://previous-tunnel.trycloudflare.com";
 const CONFIG_URL = "https://configured-fallback.trycloudflare.com";
 
-/** A D1 stand-in for the single-row `prover` table. */
-function fakeDb(prover = null) {
-  const state = { prover };
+/** A D1 stand-in for the `provers` table: one row per registered url. */
+function fakeDb(...rows) {
+  const state = { provers: new Map(rows.filter(Boolean).map((r) => [r.url, r])) };
   return {
     state,
     prepare(sql) {
       const s = sql.replace(/\s+/g, " ").trim();
       const stmt = (args) => ({
         async run() {
-          if (s.startsWith("INSERT INTO prover")) {
-            state.prover = { url: args[0], circuits: args[1], updated_at: args[2] };
+          if (s.startsWith("INSERT INTO provers")) {
+            state.provers.set(args[0], { url: args[0], circuits: args[1], updated_at: args[2] });
+          } else if (s.startsWith("DELETE FROM provers")) {
+            for (const [url, row] of state.provers) if (row.updated_at < args[0]) state.provers.delete(url);
           }
           return { success: true };
         },
         async first() {
-          if (s.startsWith("SELECT url, circuits, updated_at FROM prover")) return state.prover;
+          // The retired single-row table, read only as the deploy-window fallback.
+          if (s.startsWith("SELECT url, circuits, updated_at FROM prover WHERE id = 1")) return state.legacy ?? null;
           return null;
         },
         async all() {
-          return { results: [] };
+          return { results: [...state.provers.values()] };
         },
       });
       const base = stmt([]);
@@ -51,6 +64,13 @@ function fakeDb(prover = null) {
     },
   };
 }
+
+/** A stored registration row, `ageMs` old. */
+const storedRow = (url, ageMs = 0) => ({
+  url,
+  circuits: JSON.stringify(["gatekeeper"]),
+  updated_at: new Date(Date.now() - ageMs).toISOString(),
+});
 
 const envelope = (overrides = {}) => ({
   url: NEW_URL,
@@ -106,7 +126,7 @@ test("a valid registration is stored and becomes the prover url", async () => {
   const db = fakeDb();
   const res = await register(envelope(), { env: envFor(db) });
   assert.equal(res.status, 200);
-  assert.equal(db.state.prover.url, NEW_URL);
+  assert.equal(db.state.provers.get(NEW_URL).url, NEW_URL);
 
   const prover = await currentProver({ DB: db, PROVER_URL: CONFIG_URL });
   assert.equal(prover.source, "registration", "a fresh registration must beat PROVER_URL");
@@ -145,6 +165,88 @@ test("a fresh heartbeat keeps an unchanged url usable", async () => {
   const second = await currentProver({ DB: db });
   assert.equal(second.url, NEW_URL);
   assert.equal(second.source, "registration");
+});
+
+// --- two provers at once: the resolution must not depend on who beat last ----------
+
+const STABLE_URL = "https://vfy-prover-missi.fly.dev";
+
+test("a stable prover wins over a quick tunnel when both are fresh", async () => {
+  // Both heartbeat inside the cut-off, so both are candidates. Last write used
+  // to decide, which flipped the Worker between them every two minutes.
+  for (const rows of [[storedRow(NEW_URL), storedRow(STABLE_URL)], [storedRow(STABLE_URL), storedRow(NEW_URL)]]) {
+    const prover = await currentProver({ DB: fakeDb(...rows) });
+    assert.equal(prover.url, STABLE_URL, "stable host wins regardless of insert order");
+    assert.equal(prover.kind, "stable");
+    assert.equal(prover.source, "registration");
+    assert.deepEqual(prover.circuits, ["gatekeeper"]);
+  }
+});
+
+test("a fresh tunnel is still used when the stable prover stopped beating", async () => {
+  const db = fakeDb(storedRow(NEW_URL), storedRow(STABLE_URL, PROVER_STALE_MS + 60_000));
+  const prover = await currentProver({ DB: db });
+  assert.equal(prover.url, NEW_URL, "the quick-tunnel case must not regress");
+  assert.equal(prover.kind, "tunnel");
+});
+
+test("a configured stable PROVER_URL beats a fresh tunnel registration", async () => {
+  const prover = await currentProver({ DB: fakeDb(storedRow(NEW_URL)), PROVER_URL: STABLE_URL });
+  assert.equal(prover.url, STABLE_URL);
+  assert.equal(prover.source, "config");
+  assert.equal(prover.kind, "stable");
+});
+
+test("two fresh stable registrations resolve to the newest, not the last written", async () => {
+  const older = "https://prover-a.fly.dev";
+  const newer = "https://prover-b.fly.dev";
+  const prover = await currentProver({ DB: fakeDb(storedRow(older, 5 * 60_000), storedRow(newer, 60_000)) });
+  assert.equal(prover.url, newer);
+});
+
+// --- deploy window: the old bundle only ever wrote the legacy single-row table ---
+
+/** A database whose `provers` table is empty, with the old `prover` row set. */
+function legacyDb(row) {
+  const db = fakeDb();
+  db.state.legacy = row;
+  return db;
+}
+
+test("with provers empty, a fresh legacy row still proves — the deploy leaves no gap", async () => {
+  // Right after a deploy the prover keeps heartbeating into `prover` for up to
+  // two minutes. Without this fallback every task in that window loses its
+  // proof (-2 each).
+  const prover = await currentProver({ DB: legacyDb(storedRow(NEW_URL)) });
+  assert.equal(prover.url, NEW_URL);
+  assert.equal(prover.source, "registration");
+  assert.equal(prover.kind, "tunnel");
+  assert.equal(prover.legacy, true);
+  assert.deepEqual(prover.circuits, ["gatekeeper"]);
+});
+
+test("a fresh provers row wins over the legacy row, so the fallback is temporary", async () => {
+  const db = legacyDb(storedRow(OLD_URL));
+  db.state.provers.set(STABLE_URL, storedRow(STABLE_URL));
+  const prover = await currentProver({ DB: db });
+  assert.equal(prover.url, STABLE_URL);
+  assert.equal(prover.legacy, undefined);
+});
+
+test("a stale legacy row is ignored exactly like a stale registration", async () => {
+  assert.equal(await currentProver({ DB: legacyDb(storedRow(OLD_URL, PROVER_STALE_MS + 60_000)) }), null);
+});
+
+test("a missing legacy table is not an error and falls back to PROVER_URL", async () => {
+  // A database created from the current schema.sql has no `prover` table.
+  const db = fakeDb();
+  db.prepare = (sql) => {
+    if (sql.includes("FROM prover WHERE id = 1")) throw new Error("no such table: prover");
+    return fakeDb().prepare(sql);
+  };
+  const prover = await currentProver({ DB: db, PROVER_URL: CONFIG_URL });
+  assert.equal(prover.source, "config");
+  assert.equal(prover.url, CONFIG_URL);
 });
 
 // --- the prove call the registration exists for ---------------------------------

@@ -20,7 +20,7 @@
 // moved: using it would just add a failing round trip to every task, so the
 // row is ignored until it refreshes.
 import { hmacHex, safeEqual } from "./hmac.js";
-import { getProver, saveProver } from "./store.js";
+import { getProver, listProvers, saveProver } from "./store.js";
 
 const enc = new TextEncoder();
 
@@ -42,36 +42,121 @@ const json = (obj, status = 200) =>
 /** True when this deployment has any prover configured at all. */
 const proverConfigured = (env) => Boolean(String(env.PROVER_TOKEN ?? "").trim()) && Boolean(env.PROVER_URL || env.DB);
 
+/** A Cloudflare quick tunnel, i.e. a hostname that dies with its process. */
+const QUICK_TUNNEL = /\.trycloudflare\.com$/i;
+const isTunnel = (url) => {
+  try {
+    return QUICK_TUNNEL.test(new URL(url).hostname);
+  } catch {
+    return true; // unparseable is not something to prefer
+  }
+};
+
+const circuitsOf = (raw) => {
+  try {
+    return JSON.parse(raw ?? "[]");
+  } catch {
+    return [];
+  }
+};
+
 /**
  * Where the prover is right now.
  *
- * A fresh registration wins. Only when there is none (nothing registered yet,
- * or the heartbeat lapsed) does PROVER_URL apply.
+ * Several provers can be registered at once — a PC supervisor behind a quick
+ * tunnel and the Fly container on a stable name both heartbeat — so this picks
+ * one DETERMINISTICALLY instead of by last write (which made the Worker flip
+ * between them every two minutes, and half those minutes belonged to a tunnel
+ * that dies when the PC sleeps):
+ *
+ *   1. only FRESH rows are candidates (a lapsed heartbeat means down, not moved)
+ *   2. a stable host beats a quick tunnel
+ *   3. among equals, a registration beats PROVER_URL (it carries the circuit
+ *      list), then the newest registration, then the url itself
+ *
+ * The quick-tunnel case is unchanged: when the tunnel is the only fresh prover
+ * it is chosen, exactly as before.
+ *
+ * DEPLOY WINDOW: the bundle this replaced wrote the single-row `prover`
+ * table. A deploy therefore starts with `provers` empty (or holding only a
+ * stale migration copy) while the prover keeps heartbeating into `prover`, and
+ * up to two minutes would pass unproved — −2 a task. So when `provers` has no
+ * fresh row, the fresh legacy row is read under the SAME freshness rule and
+ * used. Once `provers` has a heartbeat the legacy table is never consulted.
  *
  * @returns {Promise<{url: string, circuits: string[]|null, source: "registration"|"config",
- *   updatedAt?: string, ageMs?: number}|null>}
+ *   kind: "stable"|"tunnel", legacy?: true, updatedAt?: string, ageMs?: number}|null>}
  */
 export async function currentProver(env) {
+  const now = Date.now();
+  const candidates = [];
+  let fresh = 0;
+
   if (env.DB) {
     try {
-      const row = await getProver(env.DB);
-      const age = row ? Date.now() - Date.parse(row.updated_at ?? "") : Infinity;
-      if (row?.url && Number.isFinite(age) && age >= 0 && age <= PROVER_STALE_MS) {
-        let circuits = [];
-        try {
-          circuits = JSON.parse(row.circuits ?? "[]");
-        } catch {
-          circuits = [];
-        }
-        return { url: row.url, circuits, source: "registration", updatedAt: row.updated_at, ageMs: age };
+      for (const row of await listProvers(env.DB)) {
+        const age = now - Date.parse(row.updated_at ?? "");
+        if (!row.url || !Number.isFinite(age) || age < 0 || age > PROVER_STALE_MS) continue;
+        fresh++;
+        candidates.push({
+          url: row.url,
+          circuits: circuitsOf(row.circuits),
+          source: "registration",
+          kind: isTunnel(row.url) ? "tunnel" : "stable",
+          updatedAt: row.updated_at,
+          ageMs: age,
+        });
       }
     } catch (err) {
       // A D1 hiccup must not take the answer down with it.
       console.warn(JSON.stringify({ event: "prover", error: `registration lookup failed: ${err?.message}` }));
     }
   }
-  if (env.PROVER_URL) return { url: env.PROVER_URL, circuits: null, source: "config" };
-  return null;
+
+  if (fresh === 0 && env.DB) {
+    try {
+      const row = await getProver(env.DB);
+      const age = now - Date.parse(row?.updated_at ?? "");
+      if (row?.url && Number.isFinite(age) && age >= 0 && age <= PROVER_STALE_MS) {
+        candidates.push({
+          url: row.url,
+          circuits: circuitsOf(row.circuits),
+          source: "registration",
+          kind: isTunnel(row.url) ? "tunnel" : "stable",
+          legacy: true,
+          updatedAt: row.updated_at,
+          ageMs: age,
+        });
+      }
+    } catch (err) {
+      // A database created after the migration has no `prover` table at all.
+      // That is the expected state, not something to log on every request.
+      if (!/no such table/i.test(err?.message ?? "")) {
+        console.warn(JSON.stringify({ event: "prover", error: `legacy lookup failed: ${err?.message}` }));
+      }
+    }
+  }
+
+  if (env.PROVER_URL) {
+    candidates.push({
+      url: env.PROVER_URL,
+      circuits: null,
+      source: "config",
+      kind: isTunnel(env.PROVER_URL) ? "tunnel" : "stable",
+      updatedAt: null,
+      ageMs: null,
+    });
+  }
+  if (candidates.length === 0) return null;
+
+  candidates.sort(
+    (a, b) =>
+      Number(a.kind === "tunnel") - Number(b.kind === "tunnel") ||
+      Number(a.source === "config") - Number(b.source === "config") ||
+      (Date.parse(b.updatedAt ?? "") || 0) - (Date.parse(a.updatedAt ?? "") || 0) ||
+      a.url.localeCompare(b.url),
+  );
+  return candidates[0];
 }
 
 /**

@@ -67,24 +67,53 @@ export async function listKnownVks(db) {
   return (res?.results ?? []).map((r) => r.vk_hash);
 }
 
+/** How long a dead registration is kept before housekeeping removes it. */
+const PROVER_ROW_TTL_MS = 24 * 60 * 60_000;
+
 /**
- * Record the prover's current url (single row).
+ * Record one prover's current url.
  *
- * A quick tunnel gets a new hostname on every restart, so the prover tells us
- * where it is; `updated_at` is also its heartbeat, and the Worker treats a row
- * older than the cutoff as "prover is down", not "prover moved".
+ * ONE ROW PER URL, not one row overall: a PC supervisor (quick tunnel) and the
+ * Fly container (stable name) can both be alive and both heartbeat, and a
+ * single row would be last-write-wins — the Worker would flip between them every
+ * two minutes. Storing both lets `currentProver` choose deterministically.
+ *
+ * `updated_at` is also the heartbeat, and a row older than the cutoff means
+ * "that prover is down", not "it moved".
  */
 export async function saveProver(db, { url, circuits = [], now = new Date() }) {
   if (!db || !url) return;
   await db
     .prepare(
-      "INSERT INTO prover (id, url, circuits, updated_at) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET url = excluded.url, circuits = excluded.circuits, updated_at = excluded.updated_at",
+      "INSERT INTO provers (url, circuits, updated_at) VALUES (?, ?, ?) ON CONFLICT(url) DO UPDATE SET circuits = excluded.circuits, updated_at = excluded.updated_at",
     )
     .bind(url, JSON.stringify(circuits), now.toISOString())
     .run();
+  // Housekeeping: a registration that stopped beating is never a candidate, so
+  // its row is dead weight. One small delete per heartbeat keeps it bounded.
+  await db
+    .prepare("DELETE FROM provers WHERE updated_at < ?")
+    .bind(new Date(now.getTime() - PROVER_ROW_TTL_MS).toISOString())
+    .run();
 }
 
-/** The last registered prover url, without judging how fresh it is. */
+/** Every registered prover url, without judging how fresh any of them is. */
+export async function listProvers(db) {
+  if (!db) return [];
+  const res = await db.prepare("SELECT url, circuits, updated_at FROM provers").all();
+  return res?.results ?? [];
+}
+
+/**
+ * The RETIRED single-row registration (id = 1).
+ *
+ * Only read as a deploy-window fallback: the bundle that shipped before
+ * `provers` existed wrote this table, so right after the switch to `provers`
+ * the only fresh row is still here. Once `provers` has a heartbeat of its own
+ * this table is never consulted again, and on a database created from the
+ * current `schema.sql` it does not exist at all — so a failure here is
+ * expected, not an incident.
+ */
 export async function getProver(db) {
   if (!db) return null;
   return (await db.prepare("SELECT url, circuits, updated_at FROM prover WHERE id = 1").first()) ?? null;
