@@ -190,6 +190,41 @@ test("a configured stable PROVER_URL beats a fresh tunnel registration", async (
   assert.equal(prover.kind, "stable");
 });
 
+test("a stable registration beats a stable PROVER_URL pointing at the same url", async () => {
+  // The kind tie-break is not enough to decide this: only the source clause is.
+  // The registration wins because it carries the circuit list.
+  const prover = await currentProver({ DB: fakeDb(storedRow(STABLE_URL)), PROVER_URL: STABLE_URL });
+  assert.equal(prover.url, STABLE_URL);
+  assert.equal(prover.source, "registration");
+  assert.equal(prover.kind, "stable");
+  assert.deepEqual(prover.circuits, ["gatekeeper"]);
+});
+
+test("a failed provers read still resolves PROVER_URL, and says so", async (t) => {
+  // A D1 hiccup must cost the registration, never the answer.
+  const warn = t.mock.method(console, "warn", () => {});
+  const brokenDb = {
+    prepare() {
+      return {
+        async all() {
+          throw new Error("D1_ERROR: network unavailable");
+        },
+      };
+    },
+  };
+  const prover = await currentProver({ DB: brokenDb, PROVER_URL: CONFIG_URL });
+  assert.equal(prover.source, "config");
+  assert.equal(prover.url, CONFIG_URL);
+
+  const logged = warn.mock.calls.map((c) => JSON.parse(String(c.arguments[0])));
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0].event, "prover");
+  assert.match(logged[0].error, /registration lookup failed/);
+
+  // With nothing else configured the same failure means no prover, not a throw.
+  assert.equal(await currentProver({ DB: brokenDb }), null);
+});
+
 test("two fresh stable registrations resolve to the newest, not the last written", async () => {
   const older = "https://prover-a.fly.dev";
   const newer = "https://prover-b.fly.dev";
