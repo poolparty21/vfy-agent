@@ -70,7 +70,3 @@ CREATE TABLE IF NOT EXISTS provers (
   circuits   TEXT NOT NULL,   -- JSON array of circuit names it can prove
   updated_at TEXT NOT NULL
 );
-
--- Migration from the retired single-row table (id = 1). Safe to re-run: the
--- next heartbeat overwrites or expires whatever it seeds.
-INSERT OR IGNORE INTO provers (url, circuits, updated_at) SELECT url, circuits, updated_at FROM prover;

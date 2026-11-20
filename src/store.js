@@ -104,21 +104,6 @@ export async function listProvers(db) {
   return res?.results ?? [];
 }
 
-/**
- * The RETIRED single-row registration (id = 1).
- *
- * Only read as a deploy-window fallback: the bundle that shipped before
- * `provers` existed wrote this table, so right after the switch to `provers`
- * the only fresh row is still here. Once `provers` has a heartbeat of its own
- * this table is never consulted again, and on a database created from the
- * current `schema.sql` it does not exist at all — so a failure here is
- * expected, not an incident.
- */
-export async function getProver(db) {
-  if (!db) return null;
-  return (await db.prepare("SELECT url, circuits, updated_at FROM prover WHERE id = 1").first()) ?? null;
-}
-
 /** Store a Steal the VFY turn and read back a previous answer for it. */
 export async function getVfyTurn(db, agentKey, matchId, turn) {
   if (!db) return null;

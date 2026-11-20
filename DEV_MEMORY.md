@@ -113,6 +113,40 @@ The migration copy in `schema.sql` (`INSERT OR IGNORE … SELECT … FROM prover
 seeds a row that expires ten minutes after it was copied — expected: it is a
 best-effort carry-over, and the fallback above is what actually covers the gap.
 
+**Deployed 2026-11-20 03:1x UTC (version `5c181434`).** The transition behaved
+exactly as designed: the first `/health` after the deploy read
+`kind:"tunnel", legacy:true, age_ms:103011` — the legacy row covering the window
+while `provers` still held only the stale migration copy. The 03:11:14Z
+supervisor heartbeat created the real `provers` row and `/health` flipped to
+`legacy:false`; the legacy row is now never consulted.
+
+**Dual registration, observed live.** Registering a stable url
+(`https://vfy-prover-missi.fly.dev`, a stand-in — no Fly app exists) next to the
+fresh tunnel row gave `{kind:"stable", legacy:false}`, and re-registering the
+tunnel a minute later (so it was the NEWEST write) still resolved to
+`kind:"stable"` — the ranking, not recency, decides. Deleting the stand-in row
+returned `/health` to `kind:"tunnel"` immediately.
+
+**Proofs still attach.** `scripts/post-deploy-check.mjs` after the deploy and
+again after the cleanup: 12/12 checks, `APPROVE / VALID_PROOF`, proof present,
+**13 of nPublic 13** signals, `groth16.verify` true against the official vkey.
+Probe rows deleted (`answers`, `proof_refs`); `provers` now holds one fresh row.
+
+⚠️ A real stable prover could not be exercised end to end: `vfy-prover-missi.fly.dev`
+does not resolve, because the Fly deploy still needs an owner login + payment
+method. The stable row therefore proves the RESOLUTION, not that a container
+serves proofs — that remains the first thing to verify after `fly deploy`.
+
+**The deploy-window fallback is gone (same day, after that deploy).** With
+`provers` heartbeating and the legacy row never read, `getProver`, the
+`fresh === 0` branch, the `legacy` flag, `/health`'s `legacy` field and the
+`schema.sql` migration copy were all removed. The fallback only existed so a
+single deploy from the old bundle to the new one could not leave up to two
+minutes unproved; it can never be needed again unless a future change stops
+writing `provers` (or repoints the prover at a deployment that never
+registers), which would be a new failure, not a deploy gap. The ranking tests
+stayed; the four fallback tests went with the code.
+
 **Open, owner-only:** registering a Poseidon commitment for `jimmygreen` —
 Dashboard → My Agents → Edit → Steal the VFY section — before the next pairing.
 Building a vfy-policy prover map (17 inputs, Poseidon) without that commitment

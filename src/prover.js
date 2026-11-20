@@ -20,7 +20,7 @@
 // moved: using it would just add a failing round trip to every task, so the
 // row is ignored until it refreshes.
 import { hmacHex, safeEqual } from "./hmac.js";
-import { getProver, listProvers, saveProver } from "./store.js";
+import { listProvers, saveProver } from "./store.js";
 
 const enc = new TextEncoder();
 
@@ -77,27 +77,18 @@ const circuitsOf = (raw) => {
  * The quick-tunnel case is unchanged: when the tunnel is the only fresh prover
  * it is chosen, exactly as before.
  *
- * DEPLOY WINDOW: the bundle this replaced wrote the single-row `prover`
- * table. A deploy therefore starts with `provers` empty (or holding only a
- * stale migration copy) while the prover keeps heartbeating into `prover`, and
- * up to two minutes would pass unproved — −2 a task. So when `provers` has no
- * fresh row, the fresh legacy row is read under the SAME freshness rule and
- * used. Once `provers` has a heartbeat the legacy table is never consulted.
- *
  * @returns {Promise<{url: string, circuits: string[]|null, source: "registration"|"config",
- *   kind: "stable"|"tunnel", legacy?: true, updatedAt?: string, ageMs?: number}|null>}
+ *   kind: "stable"|"tunnel", updatedAt?: string, ageMs?: number}|null>}
  */
 export async function currentProver(env) {
   const now = Date.now();
   const candidates = [];
-  let fresh = 0;
 
   if (env.DB) {
     try {
       for (const row of await listProvers(env.DB)) {
         const age = now - Date.parse(row.updated_at ?? "");
         if (!row.url || !Number.isFinite(age) || age < 0 || age > PROVER_STALE_MS) continue;
-        fresh++;
         candidates.push({
           url: row.url,
           circuits: circuitsOf(row.circuits),
@@ -110,30 +101,6 @@ export async function currentProver(env) {
     } catch (err) {
       // A D1 hiccup must not take the answer down with it.
       console.warn(JSON.stringify({ event: "prover", error: `registration lookup failed: ${err?.message}` }));
-    }
-  }
-
-  if (fresh === 0 && env.DB) {
-    try {
-      const row = await getProver(env.DB);
-      const age = now - Date.parse(row?.updated_at ?? "");
-      if (row?.url && Number.isFinite(age) && age >= 0 && age <= PROVER_STALE_MS) {
-        candidates.push({
-          url: row.url,
-          circuits: circuitsOf(row.circuits),
-          source: "registration",
-          kind: isTunnel(row.url) ? "tunnel" : "stable",
-          legacy: true,
-          updatedAt: row.updated_at,
-          ageMs: age,
-        });
-      }
-    } catch (err) {
-      // A database created after the migration has no `prover` table at all.
-      // That is the expected state, not something to log on every request.
-      if (!/no such table/i.test(err?.message ?? "")) {
-        console.warn(JSON.stringify({ event: "prover", error: `legacy lookup failed: ${err?.message}` }));
-      }
     }
   }
 
