@@ -195,6 +195,42 @@ test("a valid gatekeeper task is approved and signed", async () => {
   assert.ok(res.headers.get(SECRET_HEADER));
 });
 
+test("a task carrying proof and public_signals is echoed as a pair", async () => {
+  const proof = {
+    pi_a: ["1", "2", "1"],
+    pi_b: [["1", "2"], ["3", "4"], ["1", "0"]],
+    pi_c: ["5", "6", "1"],
+    protocol: "groth16",
+    curve: "bn128",
+  };
+  const public_signals = Array.from({ length: 13 }, (_, i) => String(i + 1));
+  const res = await post(gatekeeperTask({ proof, public_signals }, { task_id: "gk_echo_pair" }));
+  const body = await res.json();
+  assert.deepEqual(body.proof, proof);
+  assert.deepEqual(body.public_signals, public_signals);
+});
+
+test("half a proof pair is dropped instead of echoed as an invalid proof", async () => {
+  // Rule 6: the platform checks a proof TOGETHER with its public_signals. A
+  // proof without signals (or signals without a proof) is an invalid proof, so
+  // it scores the same -2 as none — and would also forfeit the reliability
+  // bonus. This environment has no prover, so the answer must simply omit both
+  // rather than send something the platform cannot verify.
+  const proof = { pi_a: ["1", "2", "1"], pi_b: [["1", "2"]], pi_c: ["5", "6", "1"], protocol: "groth16", curve: "bn128" };
+  const withProofOnly = await post(gatekeeperTask({ proof }, { task_id: "gk_pair_proof_only" }));
+  const a = await withProofOnly.json();
+  assert.equal(a.decision, "APPROVE");
+  assert.equal(a.proof, undefined);
+  assert.equal(a.public_signals, undefined);
+
+  const withSignalsOnly = await post(
+    gatekeeperTask({ public_signals: ["1", "2", "3"] }, { task_id: "gk_pair_signals_only" }),
+  );
+  const b = await withSignalsOnly.json();
+  assert.equal(b.proof, undefined);
+  assert.equal(b.public_signals, undefined);
+});
+
 test("a VK substitution is rejected with the canonical reason code", async () => {
   const res = await post(
     gatekeeperTask({ proof_vk: "0xa4c1000000000000000000000000000000000000000000000000000000b8ff" }),

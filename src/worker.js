@@ -87,6 +87,16 @@ const ANSWER_RESERVE_MS = 2000;
 const MAX_PROOF_BUDGET_MS = 4000;
 
 /**
+ * Rule 6 scores the PAIR, not the proof: a Groth16 `proof` without its
+ * `public_signals` (or signals without a proof) cannot be checked, so it is
+ * scored as an invalid proof — exactly the -2 that omitting it costs. Half a
+ * pair is therefore treated as no proof material at all, and the prover is
+ * asked for a complete one instead of echoing something that cannot verify.
+ */
+const isProofPair = (proof, signals) =>
+  Boolean(proof) && typeof proof === "object" && Array.isArray(signals) && signals.length > 0;
+
+/**
  * How many milliseconds are left before the platform's deadline.
  *
  * The docs say 60 seconds, but a real practice envelope (2026-10-22) carried
@@ -253,6 +263,17 @@ async function handleGatekeeper(env, task, sign) {
   // provable tasks whose proof verifies.
   let proof = pick(input, ["proof", "groth16_proof", "proof_data"]);
   let publicSignals = pick(input, ["public_signals", "publicSignals", "public_inputs"]);
+  if (!isProofPair(proof, publicSignals)) {
+    // Never send half a pair: it is invalid rather than merely absent, and the
+    // prover below can produce both halves from the decision we already chose.
+    if (proof || publicSignals) {
+      console.warn(
+        JSON.stringify({ event: "proof-gatekeeper", taskId, mode, proof: "incomplete_pair", has_proof: Boolean(proof), has_signals: Array.isArray(publicSignals) }),
+      );
+    }
+    proof = undefined;
+    publicSignals = undefined;
+  }
 
   // No proof material in the task: generate our own with the platform's
   // gatekeeper circuit. The proof covers the decision, so the circuit itself
@@ -279,7 +300,7 @@ async function handleGatekeeper(env, task, sign) {
       },
       Math.min(MAX_PROOF_BUDGET_MS, deadlineBudgetMs(task) - ANSWER_RESERVE_MS),
     );
-    if (generated) {
+    if (generated && isProofPair(generated.proof, generated.public_signals)) {
       proof = generated.proof;
       publicSignals = generated.public_signals;
       proofMs = generated.ms ?? 0;
@@ -307,6 +328,7 @@ async function handleGatekeeper(env, task, sign) {
       replay: isReplay,
       verification: verification.status,
       proof: proofMs === null ? (proof ? "echoed" : "none") : "attached",
+      proof_signals: Array.isArray(publicSignals) ? publicSignals.length : 0,
       proof_ms: proofMs,
       proof_verified: proofVerified,
     }),
