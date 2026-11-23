@@ -1,0 +1,50 @@
+{
+  "_readme": [
+    "Copy to config.json and fill in the URLs at launch (Nov 24, 07:00 UTC).",
+    "Left blank is intentional: today there is no published testnet faucet or gateway.",
+    "Secrets never go in this file. Use ${ENV:NAME}; the value is read from the environment at run time.",
+    "Nothing here is shared with the vfy Worker, its D1, wrangler.toml or its HMAC/PROVER secrets.",
+    "claim:  url + path + bodyTemplate. {wallet} and {did} are substituted. Drop bodyTemplate for a GET faucet.",
+    "spend:  url + path + model. Set bearerEnv to the env var holding the gateway API key.",
+    "price:  flopPerMillionTokens. 0 means the price is unknown, so only tokens are logged, not FLOP spent.",
+    "share:  network.vouchersTotalUrl is optional; set it to log your airdrop share per run."
+  ],
+
+  "agent": {
+    "wallet": "",
+    "did": ""
+  },
+
+  "faucet": {
+    "url": "",
+    "method": "POST",
+    "path": "/claim",
+    "headers": {},
+    "bodyTemplate": { "address": "{wallet}" },
+    "requestAmount": ""
+  },
+
+  "gateway": {
+    "url": "",
+    "path": "/v1/chat/completions",
+    "model": "",
+    "bearerEnv": "FLOP_GATEWAY_API_KEY",
+    "maxTokensPerCall": 256,
+    "prompt": "Reply with exactly: ok"
+  },
+
+  "network": {
+    "vouchersTotalUrl": ""
+  },
+
+  "policy": {
+    "claimIntervalHours": 24,
+    "timeoutMs": 30000,
+    "retries": 2,
+    "retryDelayMs": 5000,
+    "maxCallsPerRun": 8,
+    "maxSpendPerRunFlop": 100,
+    "flopPerMillionTokens": 0,
+    "logDir": "log"
+  }
+}

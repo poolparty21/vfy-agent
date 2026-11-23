@@ -1,0 +1,3 @@
+# Real endpoints, wallet and DID stay local; only config.example.json is tracked.
+config.json
+log/
