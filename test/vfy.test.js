@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { keccak256, publicInputsHash, idempotencyKey, chooseAction, buildTurnResponse, isVfyTurn, fallbackTurnResponse, POLICY } from "../src/vfy.js";
+import { keccak256, publicInputsHash, idempotencyKey, chooseAction, buildTurnResponse, isVfyTurn, fallbackTurnResponse } from "../src/vfy.js";
 
 const enc = new TextEncoder();
 const hex = (s) => "0x" + [...s].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -113,9 +113,12 @@ test("idempotencyKey is a stable v4-shaped UUID per turn", () => {
   assert.notEqual(k, idempotencyKey("match-2", 3));
 });
 
-test("chooseAction extracts up to the cap and holds against an empty opponent", () => {
+test("chooseAction always asks for the cap, and holds against an empty opponent", () => {
+  // Not min(opponent, cap): the circuit requires amount == strategyParams[0]
+  // exactly, so an EXTRACT that asks for less than the committed amount has no
+  // witness. The resolver clamps the transfer to what the opponent holds.
   assert.deepEqual(chooseAction({ opponentBalance: 50 }), { type: "EXTRACT", amount: 10 });
-  assert.deepEqual(chooseAction({ opponentBalance: 4 }), { type: "EXTRACT", amount: 4 });
+  assert.deepEqual(chooseAction({ opponentBalance: 4 }), { type: "EXTRACT", amount: 10 });
   assert.deepEqual(chooseAction({ opponentBalance: 0 }), { type: "HOLD" });
 });
 
@@ -260,21 +263,8 @@ test("the idempotency key is derived from the real digest bytes", () => {
   assert.notEqual(key, idempotencyKey("9f4e1b2a-c53d-4b21-9f8a-1234567890ab", 4));
 });
 
-test("the commitment is keccak256(W || R) over the policy witness and salt", () => {
-  // The platform expects C = keccak256(witness words || 32-byte salt), where
-  // the witness is the policy parameters as 32-byte big-endian words.
-  const salt = Buffer.alloc(32, 7);
-  const word = (n) => Buffer.from(BigInt(n).toString(16).padStart(64, "0"), "hex");
-  const witness = [POLICY.extractCap, Number(POLICY.version)].map(word);
-  const expected =
-    "0x" +
-    Buffer.from(keccak256(Buffer.concat([...witness, salt])).slice(2), "hex").toString("hex");
-  assert.match(expected, /^0x[0-9a-f]{64}$/);
-  // A different salt must give a different commitment.
-  const other =
-    "0x" +
-    Buffer.from(keccak256(Buffer.concat([...witness, Buffer.alloc(32, 8)])).slice(2), "hex").toString(
-      "hex",
-    );
-  assert.notEqual(expected, other);
-});
+// The commitment is NOT a keccak hash. The circuit derives it in circuit as
+// Poseidon(strategyParams[0..7], salt); a keccak value has no witness at all,
+// which is what cost the 13–17 Nov stage −2 on every turn. The Poseidon
+// implementation and its pinned vectors live in test/poseidon.test.js, and
+// `node prover/check-vfy-turn.mjs` proves one turn against the official zkey.

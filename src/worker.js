@@ -354,16 +354,39 @@ async function handleVfyTurn(env, task, sign) {
   // invalid response is scored as a HOLD with a reliability penalty, but a
   // thrown error is a delivery timeout — strictly worse.
   //
-  // Why no proof is requested here: the vfy-policy circuit derives the
-  // commitment as Poseidon(strategyParams[0..7], salt), and the commitment the
-  // platform froze at pairing for this agent is a keccak256 value. The witness
-  // cannot exist, so fullProve can only fail — every turn of the 13–17 Nov
-  // Swiss stage went out unproved and scored −2. Nothing in the Worker can fix
-  // that; the fix is registering a Poseidon-derived commitment on the dashboard
-  // before pairing. See DEV_MEMORY (2026-11-20).
+  // The proof is optional at every step. The circuit derives the commitment in
+  // circuit as Poseidon(strategyParams[0..7], salt), so a witness exists only
+  // for a commitment generated the same way (`node scripts_commit.mjs`). The
+  // prover holds the private strategy and the commitment travels in the
+  // envelope, so the Worker only forwards the turn facts. No prover, no VFY
+  // circuit, a commitment that is not the hash of that strategy or a prover
+  // that misses its budget all fall through to the same schema-valid response
+  // WITHOUT a proof (−2), never to a lost turn.
   let response;
   try {
     response = buildTurnResponse(task, new Date(), env.STRATEGY_COMMITMENT);
+    const commitment = task.strategyCommitment?.hash ?? env.STRATEGY_COMMITMENT;
+    if (commitment) {
+      const proofMaterial = await requestProof(
+        env,
+        "steal-the-vfy",
+        {
+          turn: {
+            matchId,
+            turn,
+            selfBalance: task.state?.selfBalance,
+            opponentBalance: task.state?.opponentBalance,
+            action: response.action,
+            circuitVersion: response.policyProof?.circuitVersion,
+            commitment,
+          },
+        },
+        Math.min(MAX_PROOF_BUDGET_MS, deadlineBudgetMs(task) - ANSWER_RESERVE_MS),
+      );
+      if (isProofPair(proofMaterial?.proof, proofMaterial?.public_signals)) {
+        response = buildTurnResponse(task, new Date(), env.STRATEGY_COMMITMENT, proofMaterial);
+      }
+    }
   } catch (err) {
     console.error("vfy response build failed:", err?.message);
     response = fallbackTurnResponse(task);
@@ -386,6 +409,7 @@ async function handleVfyTurn(env, task, sign) {
       // "none" is not silent any more: an unproved turn is −2, and that is the
       // failure this project kept missing in its own logs.
       proof: response.policyProof?.proof ? "attached" : "none",
+      proof_signals: response.policyProof?.public_signals?.length ?? 0,
     }),
   );
   return send(env, 200, response, sign);

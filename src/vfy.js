@@ -150,7 +150,7 @@ export function publicInputsHash({
   const versionCode = CIRCUIT_VERSION_CODE[circuitVersion] ?? 1n;
   const fields = [
     commitment,
-    matchIdWord(matchId),
+    matchIdField(matchId),
     turn,
     selfBalance,
     opponentBalance,
@@ -190,7 +190,7 @@ export function publicInputsHash({
  * platform for a hex id (the case the platform actually produces), and it
  * keeps a malformed id from becoming a lost turn.
  */
-function matchIdWord(matchId) {
+export function matchIdField(matchId) {
   const raw = String(matchId ?? "");
   const hex = raw.replace(/^0x/i, "").replace(/-/g, "");
   if (hex.length > 0 && /^[0-9a-fA-F]+$/.test(hex) && hex.length % 2 === 0) {
@@ -232,8 +232,14 @@ export function idempotencyKey(matchId, turn) {
 export function chooseAction(state, policy = POLICY) {
   const opponent = toBig(state?.opponentBalance ?? 0);
   if (opponent <= 0n) return { type: "HOLD" };
-  const amount = Number(opponent < BigInt(policy.extractCap) ? opponent : BigInt(policy.extractCap));
-  return { type: "EXTRACT", amount };
+  // ALWAYS ask for the full cap, never min(opponent, cap).
+  //
+  // The vfy-policy circuit requires amount == strategyParams[0] EXACTLY, so a
+  // turn that extracts 4 because the opponent only holds 4 has NO WITNESS under
+  // a commitment of [10, …] — it would cost −2 like any other invalid proof.
+  // "EXTRACT takes up to 10" means the resolver clamps the transfer, not that
+  // the agent asks for less.
+  return { type: "EXTRACT", amount: Number(policy.extractCap) };
 }
 
 /**

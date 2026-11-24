@@ -2,6 +2,70 @@
 
 > Session log, newest first. Project contract: `AGENTS.md`. Workspace log: `C:\mnt\www\DEV_MEMORY.md`.
 
+### 2026-11-24 — the commitment is Poseidon now, and one turn is proved before anything is registered
+
+**Asked:** build a Poseidon commitment generator that matches vfy-policy exactly
+(`strategyParams[0..7]` first, salt last, 9 signals), plus a check that one
+practice turn returns `policyProof.proof` with nine signals **before** pairing.
+
+**The hash is settled, not guessed.** `prover/poseidon.mjs` is circomlib's
+Poseidon(9) — `t = 10`, 8 full rounds, 60 partial (circomlib `N_ROUNDS_P[8]`) —
+with circomlib's constant table in `prover/poseidon-t10.json`. The table is data,
+not hand-typed: it was generated once from circomlibjs, and
+`test/poseidon.test.js` pins three circomlibjs vectors. Input order is
+`[p0..p7, salt]`, salt LAST; state is `[capacity, x0..x8]`.
+
+**Public signals, confirmed with a real proof:** `[digest, commitment, matchId,
+turnNumber, selfBalance, opponentBalance, action, amount, circuitVersion]` —
+nine, matching `nPublic 9`, with `[1]` the commitment. The eight-value array the
+Worker used to hand-build was the wrong shape, as the 2026-11-20 entry said.
+
+**What shipped:**
+
+| file | what it is |
+|---|---|
+| `prover/poseidon.mjs` | dependency-free Poseidon(9) + `strategyCommitment(params, salt)` |
+| `prover/poseidon-t10.json` | circomlib constants for t=10 (680 C, 10×10 M) |
+| `scripts_commit.mjs` | **rewritten**: was the keccak generator, now prints the Poseidon commitment, dashboard fields and the `wrangler.toml` line (`--new-salt` rotates) |
+| `prover/maps/steal-the-vfy.mjs` | the 17 circuit inputs from a turn; **refuses** a commitment that is not the hash of the strategy on the prover |
+| `prover/check-vfy-turn.mjs` | witness → Groth16 → verify against the official vkey → the turn response with `policyProof.proof` + 9 signals; exits non-zero otherwise |
+| `src/worker.js` | `handleVfyTurn` now asks the prover for a `steal-the-vfy` proof and rebuilds the response with it; every failure path still returns the schema-valid response without a proof |
+| `src/vfy.js` | `chooseAction` always asks for the cap, and `matchIdWord` exported as `matchIdField` |
+
+**A second real defect, found by the proof check:** `chooseAction` returned
+`min(opponent, 10)`, but the circuit requires `amount == strategyParams[0]`
+**exactly**. A turn extracting 4 from an opponent holding 4 could never be
+proved under a `[10,0,…]` commitment — another −2 turn. It now always asks for
+the cap (the resolver clamps the transfer). With `[10,0,0,0,0,0,0,0]` the only
+reachable branches are EXTRACT 10 (opponent > 0) and HOLD (opponent 0), and the
+check covers the EXTRACT branch.
+
+**Verified:** `node prover/check-vfy-turn.mjs` → **12/12**, witness 61 KB,
+proof verifies against the official vkey, `policyProof.proof` present, nine
+signals, `[1]` = the commitment, and a commitment from a different salt is
+refused. `npm test` **131/131**. Artifacts live in
+`prover/circuits/steal-the-vfy/` (wasm + zkey gitignored, `vkey.json` tracked).
+
+**Commitment for the current salt/params:**
+`0x214cee80b0ffc3c09aab6d37f421f8b35f0ac88c0088e282ff108ded69026ba1`
+(`node scripts_commit.mjs` reproduces it).
+
+**Owner-only, in this order — none of it done here:**
+
+1. Dashboard → My Agents → **jimmygreen** → Edit → Steal the VFY: commitment
+   `0x214cee…6ba1`, circuit version `v1-draft`, policy `max-extract-v1`.
+2. `wrangler.toml` `STRATEGY_COMMITMENT` → the same value (still the old keccak
+   one; the envelope's commitment wins at runtime, the var is the fallback).
+3. Deploy the Worker — the VFY proof request is not live until it is.
+4. Prover: `STRATEGY_SALT` must be set wherever the prover runs (`.strategy-salt`
+   is `.dockerignore`d, so the Fly container needs `fly secrets set`), then
+   restart `node prover/supervisor.mjs` and confirm `/health` lists
+   `steal-the-vfy`.
+
+Until every step is done, a VFY turn still answers correctly and unproved —
+but with the right commitment it is now a −2 that can be fixed, not an
+impossibility.
+
 ### 2026-11-20 — jimmygreen's −167: the silence is the event ending, the loss is unproved turns
 
 **Asked:** why −167 in Steal the VFY, and no turn since 17 Nov — is the handler
