@@ -388,6 +388,10 @@ async function cmdRun(cfg, v, flags, logDir) {
   const state = readState(logDir);
   const runId = new Date().toISOString().replace(/[-:.TZ]/g, "");
 
+  // Build the spend request before touching the faucet: a ${ENV:NAME} that is
+  // not set must fail here, or the run burns a claim it cannot spend.
+  spendRequest(cfg, v);
+
   const claimRes = await claim(cfg, v, state, { force: !!flags.force, dryRun: !!flags["dry-run"] });
 
   if (claimRes.status === "granted" && !flags["dry-run"]) {
@@ -429,7 +433,13 @@ async function cmdRun(cfg, v, flags, logDir) {
     );
   }
 
-  if (flags.quiet) return 0;
+  const hardFail =
+    claimRes.status === "error" ||
+    spendRes.stoppedReason === "no gateway url in config" ||
+    (!flags["dry-run"] && spendRes.calls === 0);
+
+  // --quiet hides the summary, not the exit code: a scheduler reads the status.
+  if (flags.quiet) return hardFail ? 1 : 0;
 
   const line = (...a) => console.log(...a);
   line(`run ${runId}`);
@@ -442,10 +452,6 @@ async function cmdRun(cfg, v, flags, logDir) {
     line("  dry-run: nothing sent, nothing logged");
     line(`  claim request  ${JSON.stringify(claimRes.body ?? null)}`);
   }
-  const hardFail =
-    claimRes.status === "error" ||
-    spendRes.stoppedReason === "no gateway url in config" ||
-    (!flags["dry-run"] && spendRes.calls === 0);
   if (spendRes.stoppedReason === "no gateway url in config") {
     line("  ! set gateway.url in config.json before the real run");
   }
