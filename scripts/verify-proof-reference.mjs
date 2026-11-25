@@ -12,6 +12,7 @@
 // It has NO dependencies: it talks to the public zkVerify RPC over fetch and
 // uses src/blake2.js, the same from-scratch BLAKE2b-256 the Worker uses.
 
+import { pathToFileURL } from "node:url";
 import { blake2b256Hex } from "../src/blake2.js";
 import { findTransactionInBlock, finalizedBlockNumber, verifyProofReference, isFinalized } from "../src/zkverify.js";
 
@@ -27,7 +28,10 @@ const DEFAULT_REFERENCE = {
 
 export { DEFAULT_REFERENCE, verifyProofReference, isFinalized };
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Compare URLs, not strings: on Windows process.argv[1] is a path with
+// backslashes (C:\\...), so a hand-built `file://` prefix never matches and the
+// script would exit 0 without checking anything.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const proofTx = process.argv[2] || DEFAULT_REFERENCE.proofTx;
   const blockNumber = Number(process.argv[3] || DEFAULT_REFERENCE.blockNumber);
   try {
