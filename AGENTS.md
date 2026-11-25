@@ -88,7 +88,7 @@ src/zkverify.js on-chain verification (Kurier) + zkVerify RPC reads
 src/vfy.js      Steal the VFY turn responses, keccak-256, circuit version
 src/prover.js   prover client + signed url registration (optional; no prover ⇒ no proof)
 prover/         the prover: snarkjs + the gatekeeper signal map (own package)
-prover/supervisor.mjs   runs tunnel + prover and re-registers the tunnel url
+prover/supervisor.mjs   ⛔ disabled here (cloudflared port 7844 blocked); refuses to start without ALLOW_CLOUDFLARED_TUNNEL=1
 scripts/verify-proof-reference.mjs   re-check the published proof reference
 test/           123 tests, no network access needed
 schema.sql      D1 schema
@@ -208,13 +208,19 @@ npm test                              # 123 tests, no network
 
 ```bash
 # The prover, and the tunnel in front of it: ONE command.
-# Proving does not fit in a Worker, and a quick tunnel gets a NEW hostname on
+# Proving does not fit in a Worker, and a tunnel gets a NEW hostname on
 # every restart — so the supervisor re-registers the current url with the
 # Worker (signed with PROVER_TOKEN, stored in D1 `provers`, one row per url,
 # 10-minute cutoff).
-# QUIC is blocked on this machine, so the tunnel is forced to http2.
+#
+# ⛔ `prover/supervisor.mjs` is DISABLED: it starts cloudflared, and this
+# network blocks the tunnel's edge port 7844 (dial tcp …:7844: i/o timeout).
+# Its hostnames answer Cloudflare 1033/530 but still register with the Worker,
+# overwriting the working registration (a fresh registration wins). Watch it
+# fail to start: it exits 1 with that message unless ALLOW_CLOUDFLARED_TUNNEL=1.
+# The working stopgap is the serveo supervisor (ssh over 443):
 cd prover && npm install          # once
-cd .. && node prover/supervisor.mjs
+cd .. && node .tooling/prover-serveo.mjs
 # Watch it with: GET /health → { prover: { source, age_ms, circuits } }
 #   source "registration" = the prover told us where it is (normal)
 #   source "config"       = PROVER_URL fallback (no fresh registration)

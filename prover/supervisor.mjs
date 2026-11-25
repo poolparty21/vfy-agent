@@ -1,7 +1,21 @@
+// ⛔ DO NOT RUN THIS ON THIS MACHINE — use .tooling/prover-serveo.mjs instead.
+//
+// cloudflared quick tunnels need outbound TCP/UDP 7844 to Cloudflare's edge,
+// and this network blocks it (`dial tcp 198.41.200.113:7844: i/o timeout`). A
+// tunnel started here still REGISTERS its url with the Worker — a fresh
+// registration beats the working one — so it overwrites the live serveo
+// registration with a hostname that only ever answers Cloudflare 1033/530.
+// Result: every task unproved, −2 each, and GET /health still looks healthy.
+//
+// The file refuses to start unless ALLOW_CLOUDFLARED_TUNNEL=1 is explicitly
+// set (only sensible on a network where 7844 is open, e.g. the Fly host).
+//
+//   node .tooling/prover-serveo.mjs      # what actually runs here
+//
 // One command to run everything the prover needs, and to keep the Worker
 // pointed at it.
 //
-//   node prover/supervisor.mjs
+//   ALLOW_CLOUDFLARED_TUNNEL=1 node prover/supervisor.mjs
 //
 // It runs, and restarts if they die:
 //   1. cloudflared — a quick tunnel to the local prover. Its hostname CHANGES
@@ -13,13 +27,37 @@
 // heartbeat, so a restarted tunnel self-heals instead of silently costing a
 // proof on every task.
 //
-// Env: WORKER_URL, PROVER_TOKEN (or ../.prover-token), PROVER_PORT,
+// Env: ALLOW_CLOUDFLARED_TUNNEL (must be "1" or it exits), WORKER_URL,
+//      PROVER_TOKEN (or ../.prover-token), PROVER_PORT,
 //      CLOUDFLARED (path to the binary), PROVER_CIRCUITS.
 import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+// The guard comes before any other check so this message is what a
+// well-meaning `node prover/supervisor.mjs` actually sees.
+if (process.env.ALLOW_CLOUDFLARED_TUNNEL !== "1") {
+  console.error(
+    [
+      "⛔ prover/supervisor.mjs is disabled on this machine.",
+      "",
+      "Its cloudflared quick tunnel cannot connect here: outbound TCP/UDP 7844 to",
+      "Cloudflare's edge times out. Every hostname it mints answers Cloudflare 1033/530,",
+      "but it still registers that dead url with the Worker — a fresh registration beats",
+      "the working one — so it silently replaces the live serveo registration and every",
+      "task goes out unproved (−2 each) while GET /health still looks healthy.",
+      "",
+      "Run the working tunnel instead:",
+      "    node .tooling/prover-serveo.mjs",
+      "",
+      "To override anyway (only where port 7844 is open):",
+      "    ALLOW_CLOUDFLARED_TUNNEL=1 node prover/supervisor.mjs",
+    ].join("\n"),
+  );
+  process.exit(1);
+}
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PROVER_DIR = join(ROOT, "prover");
